@@ -53,7 +53,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.parseColor("#F00F2A3F"))
         }
         val screenW = resources.displayMetrics.widthPixels
-        root.addView(panel, FrameLayout.LayoutParams((screenW * 0.56).toInt(), ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(panel, FrameLayout.LayoutParams((screenW * 0.62).toInt(), ViewGroup.LayoutParams.MATCH_PARENT))
 
         panel.addView(TextView(this).apply {
             text = "TV Nakładka – ustawienia"
@@ -74,7 +74,11 @@ class MainActivity : Activity() {
             tabButtons[key] = b
             tabRow.addView(b)
         }
-        panel.addView(tabRow)
+        // zakładki w przewijanym pasku – na wąskim panelu nie mieszczą się wszystkie
+        panel.addView(android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(tabRow)
+        })
 
         rows = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
