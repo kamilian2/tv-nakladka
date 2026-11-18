@@ -32,6 +32,7 @@ class OverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        installCrashLogger(this)
         startForeground(1, buildNotification())
         overlay = OverlayManager(this)
         OverlayManager.current = overlay

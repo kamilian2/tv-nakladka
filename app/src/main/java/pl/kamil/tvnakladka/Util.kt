@@ -11,6 +11,34 @@ import java.net.NetworkInterface
 
 const val API_PORT = 5002
 
+/** Zapisuje ostatni błąd aplikacji do pliku (widoczny na stronie /log i na ekranie ustawień). */
+fun installCrashLogger(ctx: Context) {
+    val prev = Thread.getDefaultUncaughtExceptionHandler()
+    if (prev is CrashLogger) return
+    Thread.setDefaultUncaughtExceptionHandler(CrashLogger(ctx.applicationContext, prev))
+}
+
+class CrashLogger(
+    private val ctx: Context,
+    private val prev: Thread.UncaughtExceptionHandler?,
+) : Thread.UncaughtExceptionHandler {
+    override fun uncaughtException(t: Thread, e: Throwable) {
+        try {
+            val sw = java.io.StringWriter()
+            e.printStackTrace(java.io.PrintWriter(sw))
+            java.io.File(ctx.filesDir, "crash.txt").writeText(
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date()) +
+                    "\n" + sw.toString()
+            )
+        } catch (_: Exception) {}
+        prev?.uncaughtException(t, e)
+    }
+}
+
+fun lastCrash(ctx: Context): String = try {
+    java.io.File(ctx.filesDir, "crash.txt").takeIf { it.exists() }?.readText() ?: ""
+} catch (e: Exception) { "" }
+
 fun startOverlayService(ctx: Context) {
     val i = Intent(ctx, OverlayService::class.java)
     if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)

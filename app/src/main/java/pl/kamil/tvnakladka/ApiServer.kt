@@ -43,6 +43,10 @@ class ApiServer(
                     "/", "/index.html" -> html()
                     "/status" -> json(onMain { status() })
                     "/config" -> json(onMain { configWithOptions() })
+                    "/log" -> newFixedLengthResponse(
+                        Response.Status.OK, "text/plain; charset=utf-8",
+                        lastCrash(ctx).ifEmpty { "Brak zapisanych błędów." }
+                    )
                     else -> json(JSONObject().put("ok", false).put("error", "Nieznany adres: $uri"), Response.Status.NOT_FOUND)
                 }
             }

@@ -44,6 +44,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installCrashLogger(this)
 
         val root = FrameLayout(this)
         panel = LinearLayout(this).apply {
@@ -134,6 +135,11 @@ class MainActivity : Activity() {
         if (!perm) {
             sb.append("\n\n⚠ Brak uprawnienia do nakładki. Z komputera:\n")
             sb.append("adb shell appops set $packageName SYSTEM_ALERT_WINDOW allow")
+        }
+        val crash = lastCrash(this)
+        if (crash.isNotBlank()) {
+            sb.append("\n\nOstatni błąd: ")
+            sb.append(crash.lines().take(3).joinToString(" | "))
         }
         info.text = sb.toString()
     }
