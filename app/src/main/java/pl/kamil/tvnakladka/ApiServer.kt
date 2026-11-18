@@ -87,6 +87,11 @@ class ApiServer(
                     "/notify/clear" -> { overlay.removeNotification(j.optString("id")); ok() }
                     "/camera" -> { overlay.showCameras(j); ok() }
                     "/camera/stop" -> { overlay.stopCameras(); ok() }
+                    "/entity/show" -> {
+                        val d = j.opt("slot")?.toString()?.lastOrNull { it.isDigit() } ?: '1'
+                        overlay.toggleDemand("e$d", forceShow = j.optBoolean("show", true), seconds = parseSeconds(j.opt("seconds"), -1))
+                        ok()
+                    }
                     "/keys/learn" -> { overlay.startLearning(j.optString("slot", "k1")); ok() }
                     "/keys/run" -> { overlay.runKeyAction(j.optString("action", "")); ok() }
                     "/edit" -> {

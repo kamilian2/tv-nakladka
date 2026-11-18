@@ -46,7 +46,7 @@
 <div id="toast"></div>
 
 <script>
-const TABS = [["clock","Zegar"],["e1","Encja 1"],["e2","Encja 2"],["e3","Encja 3"],["camera","Kamery"],["other","Inne"],["keys","Pilot i kamery"],["ha","Home Assistant"]];
+const TABS = [["clock","Zegar"],["e1","Encja 1"],["e2","Encja 2"],["e3","Encja 3"],["e4","Encja 4"],["e5","Encja 5"],["camera","Kamery"],["other","Inne"],["keys","Pilot i kamery"],["ha","Home Assistant"]];
 let S = null, tab = "clock", timers = {};
 
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
@@ -128,7 +128,7 @@ function render() {
   const m = document.getElementById("main"); m.innerHTML = "";
   const fonts = S.fonts, colors = S.colors, bgs = S.backgrounds;
 
-  if (["clock","e1","e2","e3"].includes(tab)) {
+  if (["clock","e1","e2","e3","e4","e5"].includes(tab)) {
     const sec = tab;
     const look = card("Wygląd i położenie",
       check(sec, "visible", "Widoczny"),
@@ -186,6 +186,9 @@ function render() {
       th.querySelector("input").oninput = (e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) save(sec, "threshold", v); };
       cond.appendChild(th);
       cond.appendChild(txt("match", "Stan tekstowy (dla „równy/różny”)", "match", "np. on, home, open – puste = porównaj z progiem"));
+      cond.appendChild(check(sec, "on_demand", "Tylko na żądanie (przycisk pilota)"));
+      cond.appendChild(range(sec, "demand_seconds", "Na żądanie – czas pokazania (s, 0 = do ponownego naciśnięcia)", 0, 120, 1));
+      cond.appendChild($(`<div class="hint">„Na żądanie”: pole jest ukryte, dopóki nie naciśniesz przypisanego przycisku pilota (zakładka „Pilot i kamery” → akcja „Pokaż: …”).</div>`));
       cond.appendChild($(`<div class="hint">Przykład: produkcja PV pokazywana tylko powyżej 100 W → „Gdy wartość większa niż…”, próg 100. Gdy warunek nie jest spełniony, pole znika z ekranu.</div>`));
       m.appendChild(cond);
       loadEntities();

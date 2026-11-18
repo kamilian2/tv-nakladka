@@ -52,8 +52,10 @@ class OverlayManager(private val ctx: Context) {
         var current: OverlayManager? = null
 
         /** Elementy ustawiane w dowolnym miejscu ekranu. */
-        val ELEMENTS = listOf("clock", "e1", "e2", "e3")
-        val ELEMENT_NAMES = mapOf("clock" to "Zegar", "e1" to "Encja 1", "e2" to "Encja 2", "e3" to "Encja 3")
+        /** Pola na encje. */
+        val SLOTS = listOf("e1", "e2", "e3", "e4", "e5")
+        val ELEMENTS = listOf("clock") + SLOTS
+        val ELEMENT_NAMES = mapOf("clock" to "Zegar") + SLOTS.associateWith { "Encja ${it.drop(1)}" }
 
         /** Czcionki: id -> nazwa. Id zaczynające się od "asset:" to pliki w assets/fonts. */
         val FONTS = linkedMapOf(
@@ -93,9 +95,11 @@ class OverlayManager(private val ctx: Context) {
                 .put("size", 34).put("font", "sans-serif-medium").put("bold", false)
                 .put("color", "#FFFFFF").put("background", "#000000").put("opacity", 60)
                 .put("format", "HH:mm:ss").put("icon", "")
-            "e1", "e2", "e3" -> JSONObject()
+            "e1", "e2", "e3", "e4", "e5" -> JSONObject()
                 .put("visible", true).put("x", 100)
-                .put("y", when (name) { "e1" -> 9; "e2" -> 17; else -> 25 })
+                .put("y", 1 + 8 * (name.drop(1).toInt()))
+                // na żądanie: pole pokazuje się dopiero po naciśnięciu przycisku pilota
+                .put("on_demand", false).put("demand_seconds", 10)
                 .put("size", 24).put("font", "sans-serif").put("bold", true)
                 .put("color", "#FFFFFF").put("background", "#000000").put("opacity", 60)
                 // pobieranie z Home Assistanta
@@ -124,7 +128,7 @@ class OverlayManager(private val ctx: Context) {
             else -> JSONObject()
         }
 
-        val SECTIONS = listOf("clock", "e1", "e2", "e3", "notify", "camera", "general", "ha", "cams", "keys")
+        val SECTIONS = listOf("clock", "e1", "e2", "e3", "e4", "e5", "notify", "camera", "general", "ha", "cams", "keys")
         const val CAM_SLOTS = 6
         const val KEY_SLOTS = 6
 
@@ -175,7 +179,7 @@ class OverlayManager(private val ctx: Context) {
     }
 
     init {
-        for (e in listOf("e1", "e2", "e3")) contents[e] = Content()
+        for (e in SLOTS) contents[e] = Content()
     }
 
     // ================= ustawienia =================
@@ -206,7 +210,7 @@ class OverlayManager(private val ctx: Context) {
         }
         prefs.edit().putString("config", stored.toString()).apply()
         // usunięto encję HA z pola -> wyczyść jego treść
-        for (s in listOf("e1", "e2", "e3")) {
+        for (s in SLOTS) {
             val p = patch.optJSONObject(s) ?: continue
             if (p.has("entity") && p.optString("entity").isBlank()) clearEntity(s)
         }
@@ -404,7 +408,8 @@ class OverlayManager(private val ctx: Context) {
             el.pill.visibility = if (c.optBoolean("visible", true)) View.VISIBLE else View.GONE
         } else {
             val txt = content?.text ?: ""
-            val show = c.optBoolean("visible", true) && (txt.isNotEmpty() || editMode)
+            val demandOk = !c.optBoolean("on_demand", false) || name in demandShown || editMode
+            val show = c.optBoolean("visible", true) && (txt.isNotEmpty() || editMode) && demandOk
             el.text.text = if (txt.isEmpty() && editMode) ELEMENT_NAMES[name] else txt
             el.pill.visibility = if (show) View.VISIBLE else View.GONE
         }
@@ -796,8 +801,42 @@ class OverlayManager(private val ctx: Context) {
         return false
     }
 
-    /** cam:c1 – jedna kamera, cams:all – wszystkie zapisane, stop – zamknij. Ponowne naciśnięcie zamyka. */
+    // ---------- pola "na żądanie" ----------
+    private val demandShown = HashSet<String>()
+    private val demandHide = HashMap<String, Runnable>()
+
+    /** Pokazuje/ukrywa pole na żądanie (przycisk pilota albo API). seconds<0 = z ustawień pola. */
+    fun toggleDemand(slot: String, forceShow: Boolean = false, seconds: Long = -1) {
+        if (slot !in SLOTS) return
+        demandHide.remove(slot)?.let { handler.removeCallbacks(it) }
+        if (slot in demandShown && !forceShow) {
+            demandShown.remove(slot)
+        } else {
+            demandShown.add(slot)
+            val secs = if (seconds >= 0) seconds else cfg(slot).optLong("demand_seconds", 10)
+            if (secs > 0) {
+                val r = Runnable { demandShown.remove(slot); demandHide.remove(slot); styleElement(slot) }
+                demandHide[slot] = r
+                handler.postDelayed(r, secs * 1000)
+            }
+            ha?.refreshNow()
+        }
+        styleElement(slot)
+    }
+
+    /** cam:c1 – jedna kamera, cams:all – wszystkie zapisane, stop – zamknij, show:e4 – pokaż pole, show:all. Ponowne naciśnięcie zamyka. */
     fun runKeyAction(action: String) {
+        if (action.startsWith("show:")) {
+            val what = action.removePrefix("show:")
+            if (what == "all") {
+                val list = SLOTS.filter { cfg(it).optBoolean("on_demand", false) }
+                val anyShown = list.any { it in demandShown }
+                for (s in list) if (anyShown) { if (s in demandShown) toggleDemand(s) } else toggleDemand(s, forceShow = true)
+            } else {
+                toggleDemand(what)
+            }
+            return
+        }
         if (action == "stop" || (camerasActive && activeKeyAction == action)) {
             stopCameras()
             return
@@ -825,6 +864,12 @@ class OverlayManager(private val ctx: Context) {
         for (i in 1..CAM_SLOTS) list.add("cam:c$i" to saved.optString("c${i}_name", "Kamera $i"))
         list.add("cams:all" to "Wszystkie kamery")
         list.add("stop" to "Zamknij kamery")
+        for (s in SLOTS) {
+            val c = cfg(s)
+            val n = c.optString("label", "").ifBlank { c.optString("entity", "") }.ifBlank { "Encja ${s.drop(1)}" }
+            list.add("show:$s" to "Pokaż: $n")
+        }
+        list.add("show:all" to "Pokaż wszystkie pola „na żądanie”")
         return list
     }
 }

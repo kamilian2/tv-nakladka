@@ -38,7 +38,7 @@ class MainActivity : Activity() {
     private var waitTries = 0
 
     private val tabs = linkedMapOf(
-        "clock" to "Zegar", "e1" to "Encja 1", "e2" to "Encja 2", "e3" to "Encja 3",
+        "clock" to "Zegar", "e1" to "Encja 1", "e2" to "Encja 2", "e3" to "Encja 3", "e4" to "Encja 4", "e5" to "Encja 5",
         "camera" to "Kamery", "keys" to "Pilot i kamery", "other" to "Powiadomienia i inne", "ha" to "Home Assistant"
     )
 
@@ -180,7 +180,7 @@ class MainActivity : Activity() {
         val o = overlay!!
         val fonts = OverlayManager.FONTS.toList()
         when (key) {
-            "clock", "e1", "e2", "e3" -> {
+            "clock", "e1", "e2", "e3", "e4", "e5" -> {
                 toggleRow("Widoczny", key, "visible")
                 numberRow("Poziomo (0 = lewo, 100 = prawo)", key, "x", 0, 100, 1, 5)
                 numberRow("Pionowo (0 = góra, 100 = dół)", key, "y", 0, 100, 1, 5)
@@ -206,6 +206,8 @@ class MainActivity : Activity() {
                         "always" to "Zawsze", "above" to "Wartość > próg", "below" to "Wartość < próg",
                         "equals" to "Stan = próg/tekst", "not_equals" to "Stan ≠ próg/tekst"))
                     numberRow("Próg", key, "threshold", -1000, 100000, 1, 10)
+                    toggleRow("Tylko na żądanie (przycisk pilota)", key, "on_demand")
+                    numberRow("Na żądanie – czas pokazania (s, 0 = do ponownego naciśnięcia)", key, "demand_seconds", 0, 300, 1, 10)
                     rows.addView(label("Stan: " + (o.ha?.slotStatus?.get(key) ?: "-")))
                 }
             }

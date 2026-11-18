@@ -67,10 +67,10 @@ class HaClient(private val overlay: OverlayManager) {
         val ha = snap.optJSONObject("ha") ?: return
         val url = ha.optString("url").trim().trimEnd('/')
         val token = ha.optString("token").trim()
-        val slots = listOf("e1", "e2", "e3").filter {
+        val slots = OverlayManager.SLOTS.filter {
             snap.optJSONObject(it)?.optString("entity", "")?.isNotBlank() == true
         }
-        for (s in listOf("e1", "e2", "e3")) if (s !in slots) slotStatus[s] = "brak encji"
+        for (s in OverlayManager.SLOTS) if (s !in slots) slotStatus[s] = "brak encji"
         if (slots.isEmpty()) { status = "Brak przypisanych encji"; return }
         if (url.isEmpty() || token.isEmpty()) { status = "Podaj adres i token Home Assistanta"; return }
 
