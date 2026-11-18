@@ -81,33 +81,45 @@ class OverlayManager(private val ctx: Context) {
             "#000000" to "Czarny"
         )
 
+        /** Kolory tła (przezroczystość ustawia się osobno – "opacity" 0–100 %). */
         val BACKGROUNDS = listOf(
-            "#00000000" to "Brak", "#55000000" to "Czarne 33%", "#99000000" to "Czarne 60%",
-            "#CC000000" to "Czarne 80%", "#CC0F2A3F" to "Granatowe", "#99FFFFFF" to "Białe 60%"
+            "#000000" to "Czarne", "#0F2A3F" to "Granatowe", "#37474F" to "Grafitowe",
+            "#1B5E20" to "Zielone", "#B71C1C" to "Czerwone", "#FFFFFF" to "Białe"
         )
 
         private fun defaults(name: String): JSONObject = when (name) {
             "clock" -> JSONObject()
                 .put("visible", true).put("x", 100).put("y", 0)
                 .put("size", 34).put("font", "sans-serif-medium").put("bold", false)
-                .put("color", "#FFFFFF").put("background", "#99000000")
+                .put("color", "#FFFFFF").put("background", "#000000").put("opacity", 60)
                 .put("format", "HH:mm:ss").put("icon", "")
             "e1", "e2", "e3" -> JSONObject()
                 .put("visible", true).put("x", 100)
                 .put("y", when (name) { "e1" -> 9; "e2" -> 17; else -> 25 })
                 .put("size", 24).put("font", "sans-serif").put("bold", true)
-                .put("color", "#FFFFFF").put("background", "#99000000")
+                .put("color", "#FFFFFF").put("background", "#000000").put("opacity", 60)
+                // pobieranie z Home Assistanta
+                .put("entity", "").put("label", "").put("icon", "")
+                .put("decimals", -1).put("unit", true)
             "notify" -> JSONObject()
                 .put("corner", "top_start").put("size", 22).put("duration", 8)
-                .put("font", "sans-serif").put("background", "#CC101820")
+                .put("font", "sans-serif").put("background", "#101820").put("opacity", 80)
             "camera" -> JSONObject()
                 .put("max_seconds", 30).put("width", 400).put("gap", 10)
                 .put("align", "center").put("bottom", 24)
             "general" -> JSONObject().put("margin", 24)
+            "ha" -> JSONObject().put("url", "").put("token", "").put("interval", 5)
             else -> JSONObject()
         }
 
-        val SECTIONS = listOf("clock", "e1", "e2", "e3", "notify", "camera", "general")
+        val SECTIONS = listOf("clock", "e1", "e2", "e3", "notify", "camera", "general", "ha")
+
+        /** Kolor tła z przezroczystością: kolor bez kanału alfa + krycie 0–100 %. */
+        fun bgColor(c: JSONObject, defColor: Int): Int {
+            val base = parseColor(c.optString("background"), defColor)
+            val op = c.optDouble("opacity", 60.0).coerceIn(0.0, 100.0)
+            return Color.argb((op * 2.55).toInt(), Color.red(base), Color.green(base), Color.blue(base))
+        }
     }
 
     private val tag = "TvNakladka"
@@ -171,11 +183,25 @@ class OverlayManager(private val ctx: Context) {
             val v = patch.get(key)
             if (v !is JSONObject) continue
             val sec = stored.optJSONObject(key) ?: JSONObject().also { stored.put(key, it) }
-            for (k in v.keys()) sec.put(k, v.get(k))
+            for (k in v.keys()) {
+                // pusty token nie kasuje zapisanego (strona nie zna zapisanego tokenu)
+                if (key == "ha" && k == "token" && v.optString(k).isBlank()) continue
+                if (key == "ha" && k == "token_set") continue
+                sec.put(k, v.get(k))
+            }
         }
         prefs.edit().putString("config", stored.toString()).apply()
+        // usunięto encję HA z pola -> wyczyść jego treść
+        for (s in listOf("e1", "e2", "e3")) {
+            val p = patch.optJSONObject(s) ?: continue
+            if (p.has("entity") && p.optString("entity").isBlank()) clearEntity(s)
+        }
         refreshAll()
+        ha?.refreshNow()
     }
+
+    /** Klient Home Assistanta (ustawiany przez usługę). */
+    var ha: HaClient? = null
 
     fun set(section: String, key: String, value: Any) {
         updateConfig(JSONObject().put(section, JSONObject().put(key, value)))
@@ -346,11 +372,9 @@ class OverlayManager(private val ctx: Context) {
         val iconName = if (name == "clock") c.optString("icon", "") else (content?.icon ?: "")
         setIcon(el.icon, iconName, size, color)
 
-        val bg = parseColor(c.optString("background"), Color.parseColor("#99000000"))
         (el.pill.background as GradientDrawable).apply {
-            setColor(bg)
+            setColor(bgColor(c, Color.BLACK))
             cornerRadius = ctx.dp(size * 0.45f).toFloat()
-            setStroke(if (editMode) ctx.dp(2f) else 0, Color.parseColor("#FF18BCF2"))
         }
         val padH = ctx.dp(size * 0.5f)
         val padV = ctx.dp(size * 0.22f)
@@ -456,6 +480,15 @@ class OverlayManager(private val ctx: Context) {
         }
     }
 
+    /** Treść pola pobrana z Home Assistanta (wywołuje HaClient). */
+    fun setHaContent(slot: String, text: String, icon: String) {
+        val c = contents[slot] ?: return
+        if (c.text == text && c.icon == icon) return
+        c.text = text
+        c.icon = icon
+        styleElement(slot)
+    }
+
     fun entitiesJson(): JSONObject = JSONObject().also { o ->
         for ((k, v) in contents) o.put(k, JSONObject().put("text", v.text).put("icon", v.icon).put("color", v.color))
     }
@@ -468,7 +501,7 @@ class OverlayManager(private val ctx: Context) {
         val corner = normalizeCorner(j.optString("corner", n.optString("corner")), "top_start")
         val size = j.optDouble("size", n.optDouble("size", 22.0)).toFloat()
         val color = parseColor(j.optString("color", ""), Color.WHITE)
-        val bg = parseColor(j.optString("background", ""), parseColor(n.optString("background"), Color.parseColor("#CC101820")))
+        val bg = parseColor(j.optString("background", ""), bgColor(n, Color.parseColor("#101820")))
         val duration = parseSeconds(j.opt("duration"), n.optLong("duration", 8))
         val tf = typeface(n.optString("font", "sans-serif"), false)
 

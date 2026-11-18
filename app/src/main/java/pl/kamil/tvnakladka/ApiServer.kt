@@ -43,6 +43,12 @@ class ApiServer(
                     "/", "/index.html" -> html()
                     "/status" -> json(onMain { status() })
                     "/config" -> json(onMain { configWithOptions() })
+                    "/ha/entities" -> {
+                        val (url, token) = onMainPair { haCredentials(JSONObject()) }
+                        val client = overlay.ha ?: throw IllegalStateException("Klient HA nie działa")
+                        if (url.isBlank() || token.isBlank()) throw IllegalArgumentException("Najpierw zapisz adres i token HA")
+                        json(JSONObject().put("ok", true).put("entities", client.listEntities(url, token)))
+                    }
                     "/log" -> newFixedLengthResponse(
                         Response.Status.OK, "text/plain; charset=utf-8",
                         lastCrash(ctx).ifEmpty { "Brak zapisanych błędów." }
@@ -54,6 +60,13 @@ class ApiServer(
             val body = readBody(session)
             val j = if (body.isBlank()) JSONObject() else JSONObject(body)
 
+            if (uri == "/ha/test") {
+                val (url, token) = onMainPair { haCredentials(j) }
+                val client = overlay.ha ?: throw IllegalStateException("Klient HA nie działa")
+                if (url.isBlank() || token.isBlank()) throw IllegalArgumentException("Podaj adres i token HA")
+                return json(JSONObject().put("ok", true).put("message", client.test(url, token)))
+            }
+
             val result = onMain {
                 if (!overlay.attach()) {
                     return@onMain JSONObject()
@@ -61,10 +74,10 @@ class ApiServer(
                         .put("error", "Brak uprawnienia 'wyświetlanie nad innymi aplikacjami' – nadaj je przez ADB")
                 }
                 when (uri) {
-                    "/settings" -> { overlay.updateConfig(j); ok().put("config", overlay.config) }
+                    "/settings" -> { overlay.updateConfig(j); ok().put("config", masked()) }
                     "/settings/reset" -> {
                         overlay.resetConfig(j.optString("section", "").ifEmpty { null })
-                        ok().put("config", overlay.config)
+                        ok().put("config", masked())
                     }
                     "/clock" -> { overlay.updateConfig(JSONObject().put("clock", j)); ok() }
                     "/entity", "/tile", "/notify_fixed" -> ok().put("slot", overlay.setEntity(j))
@@ -98,6 +111,31 @@ class ApiServer(
         .put("overlay", overlay.isAttached)
         .put("cameras", overlay.camerasActive)
         .put("entities", overlay.entitiesJson())
+        .put("ha_status", overlay.ha?.status ?: "")
+
+    /** Ustawienia bez tokenu HA (strona jest dostępna w całej sieci lokalnej). */
+    private fun masked(): JSONObject {
+        val c = overlay.config
+        val ha = c.optJSONObject("ha") ?: JSONObject()
+        ha.put("token_set", ha.optString("token").isNotBlank())
+        ha.put("token", "")
+        c.put("ha", ha)
+        return c
+    }
+
+    /** Adres i token: z zapytania, a jeśli brak – zapisane. */
+    private fun haCredentials(j: JSONObject): Pair<String, String> {
+        val saved = overlay.cfg("ha")
+        val url = j.optString("url", "").ifBlank { saved.optString("url", "") }.trim()
+        val token = j.optString("token", "").ifBlank { saved.optString("token", "") }.trim()
+        return url to token
+    }
+
+    private fun onMainPair(block: () -> Pair<String, String>): Pair<String, String> {
+        var r: Pair<String, String> = "" to ""
+        onMain { r = block(); JSONObject() }
+        return r
+    }
 
     private fun configWithOptions(): JSONObject {
         fun pairs(list: List<Pair<String, String>>) = JSONArray().also { a ->
@@ -106,12 +144,13 @@ class ApiServer(
         return JSONObject()
             .put("ok", true)
             .put("version", versionName)
-            .put("config", overlay.config)
+            .put("config", masked())
             .put("fonts", pairs(OverlayManager.FONTS.toList()))
             .put("formats", JSONArray(OverlayManager.CLOCK_FORMATS))
             .put("colors", pairs(OverlayManager.COLORS))
             .put("backgrounds", pairs(OverlayManager.BACKGROUNDS))
             .put("entities", overlay.entitiesJson())
+            .put("ha_status", overlay.ha?.status ?: "")
     }
 
     private fun html(): Response {

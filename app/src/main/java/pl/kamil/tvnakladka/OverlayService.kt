@@ -17,6 +17,7 @@ class OverlayService : Service() {
 
     private lateinit var overlay: OverlayManager
     private var server: ApiServer? = null
+    private var ha: HaClient? = null
     private val handler = Handler(Looper.getMainLooper())
 
     /** Co 30 s sprawdza, czy nakładka i serwer działają (np. po nadaniu uprawnienia). */
@@ -37,6 +38,7 @@ class OverlayService : Service() {
         overlay = OverlayManager(this)
         OverlayManager.current = overlay
         overlay.attach()
+        ha = HaClient(overlay).also { overlay.ha = it; it.start() }
         startServer()
         handler.postDelayed(watchdog, 30_000)
     }
@@ -67,6 +69,7 @@ class OverlayService : Service() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         try { server?.stop() } catch (_: Exception) {}
+        ha?.stop()
         overlay.detach()
         super.onDestroy()
     }

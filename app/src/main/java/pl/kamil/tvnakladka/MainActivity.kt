@@ -37,7 +37,7 @@ class MainActivity : Activity() {
 
     private val tabs = linkedMapOf(
         "clock" to "Zegar", "e1" to "Encja 1", "e2" to "Encja 2", "e3" to "Encja 3",
-        "camera" to "Kamery", "other" to "Inne"
+        "camera" to "Kamery", "other" to "Inne", "ha" to "HA"
     )
 
     private val overlay get() = OverlayManager.current
@@ -154,6 +154,7 @@ class MainActivity : Activity() {
             rows.addView(label("Nakładka nie działa – sprawdź uprawnienie."))
             return
         }
+        val o = overlay!!
         val fonts = OverlayManager.FONTS.toList()
         when (key) {
             "clock", "e1", "e2", "e3" -> {
@@ -164,11 +165,18 @@ class MainActivity : Activity() {
                 choiceRow("Krój czcionki", key, "font", fonts)
                 toggleRow("Pogrubienie", key, "bold")
                 choiceRow("Kolor tekstu", key, "color", OverlayManager.COLORS)
-                choiceRow("Tło", key, "background", OverlayManager.BACKGROUNDS)
+                choiceRow("Kolor tła", key, "background", OverlayManager.BACKGROUNDS)
+                numberRow("Krycie tła % (0 = bez tła)", key, "opacity", 0, 100, 5, 20)
                 if (key == "clock") {
                     choiceRow("Format", key, "format", OverlayManager.CLOCK_FORMATS.map { it to it })
                 } else {
-                    rows.addView(label("Treść (tekst i ikonę) wysyła Home Assistant – slot ${key.drop(1)}."))
+                    val ent = o.cfg(key).optString("entity", "")
+                    rows.addView(label(
+                        if (ent.isBlank()) "Encja HA: nie wybrano. Wybierzesz ją na stronie http://IP:$API_PORT (zakładka pola) albo HA wyśle treść sam."
+                        else "Encja HA: $ent  (zmiana na stronie ustawień)"
+                    ))
+                    numberRow("Miejsca po przecinku (-1 = bez zmian)", key, "decimals", -1, 3, 1, 1)
+                    toggleRow("Pokaż jednostkę", key, "unit")
                 }
             }
             "camera" -> {
@@ -189,13 +197,27 @@ class MainActivity : Activity() {
                 numberRow("Powiadomienia – czas (s)", "notify", "duration", 2, 120, 1, 5)
                 choiceRow("Powiadomienia – czcionka", "notify", "font", fonts)
                 choiceRow("Powiadomienia – tło", "notify", "background", OverlayManager.BACKGROUNDS)
+                numberRow("Powiadomienia – krycie tła %", "notify", "opacity", 0, 100, 5, 20)
+            }
+            "ha" -> {
+                val h = o.cfg("ha")
+                rows.addView(label("Adres: " + h.optString("url", "").ifBlank { "(nie ustawiono)" }))
+                rows.addView(label("Token: " + if (h.optString("token", "").isBlank()) "(nie ustawiono)" else "zapisany"))
+                rows.addView(label("Stan: " + (o.ha?.status ?: "-")))
+                numberRow("Odświeżanie co (s)", "ha", "interval", 1, 300, 1, 10)
+                rows.addView(label("Adres, token i encje najwygodniej ustawić w przeglądarce: " +
+                    localIpAddresses().joinToString(" ") { "http://$it:$API_PORT" } + " – zakładka Home Assistant."))
             }
         }
     }
 
     private fun resetTab() {
         val o = overlay ?: return
-        val sections = if (tab == "other") listOf("general", "notify") else listOf(tab)
+        val sections = when (tab) {
+            "other" -> listOf("general", "notify")
+            "ha" -> listOf("ha_none") // adresu i tokenu nie kasujemy przyciskiem
+            else -> listOf(tab)
+        }
         for (s in sections) o.resetConfig(s)
         o.setEditMode(true)
         selectTab(tab)

@@ -101,7 +101,7 @@ function color(sec, key, label, presets) {
       <div class="inline"><input type="color" value="${hex6}"><select>${presets.map(o => `<option value="${o.value}" ${o.value.toUpperCase()===v.toUpperCase()?"selected":""}>${esc(o.name)}</option>`).join("")}<option value="">własny…</option></select>
       <input type="text" value="${esc(v)}" style="width:120px"></div><output></output></div>`);
   const [picker, sel, txt] = el.querySelectorAll("input[type=color], select, input[type=text]");
-  picker.oninput = () => { const alpha = (txt.value.replace("#","").length === 8) ? txt.value.replace("#","").slice(0,2) : ""; txt.value = "#" + alpha.toUpperCase() + picker.value.slice(1).toUpperCase(); save(sec, key, txt.value); };
+  picker.oninput = () => { txt.value = picker.value.toUpperCase(); save(sec, key, txt.value); };
   sel.onchange = () => { if (sel.value) { txt.value = sel.value; picker.value = "#" + sel.value.replace("#","").slice(-6); save(sec, key, sel.value); } };
   txt.onchange = () => { save(sec, key, txt.value.trim()); };
   return el;
@@ -138,7 +138,8 @@ function render() {
       select(sec, "font", "Krój czcionki", fonts),
       check(sec, "bold", "Pogrubienie"),
       color(sec, "color", "Kolor tekstu", colors),
-      color(sec, "background", "Tło (#AARRGGBB)", bgs));
+      color(sec, "background", "Kolor tła", bgs),
+      range(sec, "opacity", "Krycie tła % (0 = bez tła)", 0, 100, 1));
     if (sec === "clock") {
       look.appendChild(select(sec, "format", "Format godziny", S.formats.map(f => ({ value:f, name:f }))));
       const fr = $(`<div class="row"><label>Własny format</label><input type="text" placeholder="np. HH:mm:ss  EEEE" value="${esc(S.config.clock.format)}"><output></output></div>`);
@@ -150,6 +151,21 @@ function render() {
     m.appendChild(look);
 
     if (sec !== "clock") {
+      const c = S.config[sec];
+      const haCard = card("Pobieranie z Home Assistanta",
+        $(`<div class="row"><label>Encja</label><div class="inline"><input id="ent" type="text" list="entlist" placeholder="np. sensor.siedlce_temperatura" value="${esc(c.entity)}"><datalist id="entlist"></datalist></div><output></output></div>`),
+        $(`<div class="row"><label>Opis przed wartością</label><input id="lab" type="text" placeholder="np. Na zewnątrz" value="${esc(c.label)}"><output></output></div>`),
+        $(`<div class="row"><label>Ikona (puste = z HA)</label><input id="ico" type="text" placeholder="np. mdi:thermometer" value="${esc(c.icon)}"><output></output></div>`),
+        range(sec, "decimals", "Miejsca po przecinku (-1 = bez zmian)", -1, 3, 1),
+        check(sec, "unit", "Pokaż jednostkę"));
+      haCard.querySelector("#ent").onchange = (e) => save(sec, "entity", e.target.value.trim());
+      haCard.querySelector("#lab").onchange = (e) => save(sec, "label", e.target.value);
+      haCard.querySelector("#ico").onchange = (e) => save(sec, "icon", e.target.value.trim());
+      haCard.appendChild(buttons([["Usuń encję z pola", () => { save(sec, "entity", ""); haCard.querySelector("#ent").value = ""; }]]));
+      haCard.appendChild($(`<div class="hint">Wymaga adresu i tokenu w zakładce „Home Assistant”. Zaczniesz pisać – pojawią się podpowiedzi encji. Stan: ${esc(S.ha_status || "-")}</div>`));
+      m.appendChild(haCard);
+      loadEntities();
+
       const n = sec.slice(1), cur = (S.entities || {})[sec] || {};
       const t = card(`Podgląd – wyślij treść do pola ${n}`,
         $(`<div class="row"><label>Tekst</label><input id="tt" type="text" value="${esc(cur.text || "12 °C")}"><output></output></div>`),
@@ -193,7 +209,8 @@ function render() {
       range("notify", "size", "Wielkość", 10, 60, 1),
       range("notify", "duration", "Czas wyświetlania (s)", 2, 120, 1),
       select("notify", "font", "Krój czcionki", fonts),
-      color("notify", "background", "Tło", bgs));
+      color("notify", "background", "Kolor tła", bgs),
+      range("notify", "opacity", "Krycie tła %", 0, 100, 1));
     n.appendChild(buttons([
       ["Wyślij testowe", () => api("/notify", { title:"Test", message:"Powiadomienie z przeglądarki", icon:"mdi:bell" }), true],
       ["Przywróć domyślne", () => reset(["general","notify"])]
@@ -202,6 +219,26 @@ function render() {
   }
 
   if (tab === "ha") {
+    const h = S.config.ha;
+    const conn = card("Połączenie z Home Assistantem",
+      $(`<div class="row"><label>Adres HA</label><input id="haurl" type="text" placeholder="http://192.168.1.10:8123" value="${esc(h.url)}"><output></output></div>`),
+      $(`<div class="row"><label>Token (długoterminowy)</label><input id="hatok" type="password" placeholder="${h.token_set ? "zapisany – wpisz nowy, aby zmienić" : "wklej token"}"><output></output></div>`),
+      range("ha", "interval", "Odświeżanie co (s)", 1, 120, 1));
+    conn.appendChild(buttons([
+      ["Zapisz", async () => {
+        const url = document.getElementById("haurl").value.trim(), token = document.getElementById("hatok").value.trim();
+        const j = await api("/settings", { ha: { url, token } });
+        if (j.ok) { toast("Zapisano"); entities = null; await load(); }
+      }, true],
+      ["Testuj połączenie", async () => {
+        const url = document.getElementById("haurl").value.trim(), token = document.getElementById("hatok").value.trim();
+        const j = await api("/ha/test", { url, token });
+        if (j.ok) toast("Połączono: " + j.message);
+      }]
+    ]));
+    conn.appendChild($(`<div class="hint">Token utworzysz w HA: kliknij swój profil (lewy dolny róg) → zakładka Bezpieczeństwo → Tokeny długoterminowe → Utwórz token. Token jest zapisany tylko w telewizorze i nie jest pokazywany na tej stronie.<br>Stan: ${esc(S.ha_status || "-")}</div>`));
+    m.appendChild(conn);
+
     const base = location.protocol + "//" + location.host;
     m.appendChild(card("Kod do configuration.yaml",
       $(`<pre>${esc(`rest_command:
@@ -250,6 +287,18 @@ data:
     clock: { x: 100, y: 0, size: 40, font: "asset:dseg7" }
     e1: { x: 0, y: 0 }`)}</pre>`)));
   }
+}
+
+let entities = null;
+async function loadEntities() {
+  const dl = document.getElementById("entlist");
+  if (!dl) return;
+  if (!entities) {
+    if (!S.config.ha.url || !S.config.ha.token_set) return;
+    try { const r = await fetch("/ha/entities"); const j = await r.json(); if (j.ok) entities = j.entities; } catch (e) {}
+  }
+  if (!entities) return;
+  dl.innerHTML = entities.map(e => `<option value="${esc(e.entity_id)}">${esc(e.name)} – ${esc(e.state)} ${esc(e.unit)}</option>`).join("");
 }
 
 async function load() {
