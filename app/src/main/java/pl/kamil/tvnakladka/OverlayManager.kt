@@ -38,27 +38,96 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Cała nakładka na ekranie. Wszystkie metody wywoływać na wątku głównym.
+ * Nakładka na ekranie: zegar, 3 pola na encje, powiadomienia, kamery.
+ * Wszystkie metody wywoływać na wątku głównym.
+ *
+ * Położenie elementów: x i y w procentach (0–100).
+ * x=0 – przy lewej krawędzi, x=100 – przy prawej, x=50 – na środku (tak samo y).
  */
 @OptIn(UnstableApi::class)
 class OverlayManager(private val ctx: Context) {
+
+    companion object {
+        /** Aktualnie działająca nakładka (dla ekranu ustawień). */
+        var current: OverlayManager? = null
+
+        /** Elementy ustawiane w dowolnym miejscu ekranu. */
+        val ELEMENTS = listOf("clock", "e1", "e2", "e3")
+        val ELEMENT_NAMES = mapOf("clock" to "Zegar", "e1" to "Encja 1", "e2" to "Encja 2", "e3" to "Encja 3")
+
+        /** Czcionki: id -> nazwa. Id zaczynające się od "asset:" to pliki w assets/fonts. */
+        val FONTS = linkedMapOf(
+            "sans-serif" to "Roboto",
+            "sans-serif-medium" to "Roboto Medium",
+            "sans-serif-black" to "Roboto Black",
+            "sans-serif-light" to "Roboto Light",
+            "sans-serif-thin" to "Roboto Thin",
+            "sans-serif-condensed" to "Roboto Condensed",
+            "serif" to "Szeryfowa",
+            "monospace" to "Maszynowa",
+            "casual" to "Odręczna",
+            "cursive" to "Pisana",
+            "asset:dseg7" to "Cyfrowa 7-segmentowa",
+            "asset:dseg14" to "Cyfrowa 14-segmentowa",
+        )
+
+        val CLOCK_FORMATS = listOf(
+            "HH:mm:ss", "HH:mm", "H:mm:ss", "HH:mm:ss  EEE", "EEE d MMM  HH:mm:ss", "d.MM.yyyy  HH:mm:ss"
+        )
+
+        val COLORS = listOf(
+            "#FFFFFF" to "Biały", "#FFD54F" to "Żółty", "#FFB74D" to "Pomarańczowy", "#E57373" to "Czerwony",
+            "#81C784" to "Zielony", "#4FC3F7" to "Niebieski", "#CE93D8" to "Fioletowy", "#B0BEC5" to "Szary",
+            "#000000" to "Czarny"
+        )
+
+        val BACKGROUNDS = listOf(
+            "#00000000" to "Brak", "#55000000" to "Czarne 33%", "#99000000" to "Czarne 60%",
+            "#CC000000" to "Czarne 80%", "#CC0F2A3F" to "Granatowe", "#99FFFFFF" to "Białe 60%"
+        )
+
+        private fun defaults(name: String): JSONObject = when (name) {
+            "clock" -> JSONObject()
+                .put("visible", true).put("x", 100).put("y", 0)
+                .put("size", 34).put("font", "sans-serif-medium").put("bold", false)
+                .put("color", "#FFFFFF").put("background", "#99000000")
+                .put("format", "HH:mm:ss").put("icon", "")
+            "e1", "e2", "e3" -> JSONObject()
+                .put("visible", true).put("x", 100)
+                .put("y", when (name) { "e1" -> 9; "e2" -> 17; else -> 25 })
+                .put("size", 24).put("font", "sans-serif").put("bold", true)
+                .put("color", "#FFFFFF").put("background", "#99000000")
+            "notify" -> JSONObject()
+                .put("corner", "top_start").put("size", 22).put("duration", 8)
+                .put("font", "sans-serif").put("background", "#CC101820")
+            "camera" -> JSONObject()
+                .put("max_seconds", 30).put("width", 400).put("gap", 10)
+                .put("align", "center").put("bottom", 24)
+            "general" -> JSONObject().put("margin", 24)
+            else -> JSONObject()
+        }
+
+        val SECTIONS = listOf("clock", "e1", "e2", "e3", "notify", "camera", "general")
+    }
 
     private val tag = "TvNakladka"
     private val handler = Handler(Looper.getMainLooper())
     private val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val prefs = ctx.getSharedPreferences("nakladka", Context.MODE_PRIVATE)
+    private val assetFonts = HashMap<String, Typeface>()
 
     private var root: FrameLayout? = null
     private val corners = HashMap<String, LinearLayout>()
 
-    private var clockPill: LinearLayout? = null
-    private var clockIcon: TextView? = null
-    private var clockText: TextView? = null
-    private var clockFormat: SimpleDateFormat = SimpleDateFormat("HH:mm:ss", Locale("pl", "PL"))
+    private class Element(val pill: LinearLayout, val icon: TextView, val text: TextView)
+    private val elements = HashMap<String, Element>()
 
-    private var tilesBox: LinearLayout? = null
-    private val tiles = LinkedHashMap<String, View>()
-    private val tileExpiry = HashMap<String, Runnable>()
+    /** Treść pól na encje (z HA): tekst, ikona, opcjonalny kolor. */
+    private class Content(var text: String = "", var icon: String = "", var color: String = "")
+    private val contents = HashMap<String, Content>()
+    private val contentExpiry = HashMap<String, Runnable>()
+
+    private var clockFormat = SimpleDateFormat("HH:mm:ss", Locale("pl", "PL"))
 
     private val notifications = HashMap<String, View>()
     private val notificationExpiry = HashMap<String, Runnable>()
@@ -67,50 +136,72 @@ class OverlayManager(private val ctx: Context) {
     private val players = mutableListOf<ExoPlayer>()
     private val stopCamerasRunnable = Runnable { stopCameras() }
 
-    /** Ustawienia trwałe (zapisywane w pamięci TV). */
-    var config: JSONObject = try {
+    /** Tryb edycji: pokazuje puste pola z podpisami, żeby było widać, gdzie są. */
+    var editMode = false
+        private set
+    private val editOff = Runnable { setEditMode(false) }
+
+    /** Zapisane ustawienia (tylko zmienione pola). */
+    private val stored: JSONObject = try {
         JSONObject(prefs.getString("config", "{}") ?: "{}")
     } catch (e: Exception) {
         JSONObject()
     }
-        private set
 
-    // ---------- ustawienia ----------
+    init {
+        for (e in listOf("e1", "e2", "e3")) contents[e] = Content()
+    }
 
-    private fun section(name: String): JSONObject =
-        config.optJSONObject(name) ?: JSONObject().also { config.put(name, it) }
+    // ================= ustawienia =================
 
-    private fun clockCfg() = section("clock")
-    private fun tilesCfg() = section("tiles")
-    private fun notifyCfg() = section("notify")
-    private fun cameraCfg() = section("camera")
+    /** Ustawienia sekcji: domyślne + zapisane. */
+    fun cfg(section: String): JSONObject {
+        val d = defaults(section)
+        stored.optJSONObject(section)?.let { s -> for (k in s.keys()) d.put(k, s.get(k)) }
+        return d
+    }
 
-    private val clockCorner get() = clockCfg().optString("corner", "top_end")
-    private val tilesCorner get() = tilesCfg().optString("corner", "").ifEmpty { clockCorner }
-    private val margin get() = config.optInt("margin", 28).toFloat()
+    /** Pełne ustawienia (do API i strony WWW). */
+    val config: JSONObject
+        get() = JSONObject().also { o -> for (s in SECTIONS) o.put(s, cfg(s)) }
 
-    /** Łączy podane ustawienia z obecnymi (tylko podane pola) i zapisuje. */
+    /** Łączy podane ustawienia z zapisanymi: {"clock":{"size":40}, "e1":{"x":0}}. */
     fun updateConfig(patch: JSONObject) {
         for (key in patch.keys()) {
             val v = patch.get(key)
-            if (v is JSONObject) {
-                val sec = section(key)
-                for (k in v.keys()) sec.put(k, v.get(k))
-            } else {
-                config.put(key, v)
-            }
+            if (v !is JSONObject) continue
+            val sec = stored.optJSONObject(key) ?: JSONObject().also { stored.put(key, it) }
+            for (k in v.keys()) sec.put(k, v.get(k))
         }
-        prefs.edit().putString("config", config.toString()).apply()
-        if (root != null) {
-            applyClockStyle()
-            placeBoxes()
-        }
+        prefs.edit().putString("config", stored.toString()).apply()
+        refreshAll()
     }
 
-    // ---------- okno nakładki ----------
+    fun set(section: String, key: String, value: Any) {
+        updateConfig(JSONObject().put(section, JSONObject().put(key, value)))
+    }
 
-    fun hasPermission(): Boolean =
-        Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(ctx)
+    /** Przywraca ustawienia domyślne sekcji (albo wszystkich, gdy section == null). */
+    fun resetConfig(section: String?) {
+        if (section == null) {
+            for (k in stored.keys().asSequence().toList()) stored.remove(k)
+        } else {
+            stored.remove(section)
+        }
+        prefs.edit().putString("config", stored.toString()).apply()
+        refreshAll()
+    }
+
+    fun setEditMode(on: Boolean, seconds: Long = 0) {
+        handler.removeCallbacks(editOff)
+        editMode = on
+        if (on && seconds > 0) handler.postDelayed(editOff, seconds * 1000)
+        refreshAll()
+    }
+
+    // ================= okno nakładki =================
+
+    fun hasPermission(): Boolean = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(ctx)
 
     val isAttached get() = root != null
 
@@ -137,6 +228,8 @@ class OverlayManager(private val ctx: Context) {
         lp.gravity = Gravity.TOP or Gravity.LEFT
 
         val r = FrameLayout(ctx)
+
+        // rogi – tylko dla powiadomień
         for (c in listOf("top_start", "top_center", "top_end", "bottom_start", "bottom_center", "bottom_end")) {
             val box = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
@@ -148,29 +241,38 @@ class OverlayManager(private val ctx: Context) {
             corners[c] = box
         }
 
-        // zegar
-        val icon = TextView(ctx).apply { typeface = Mdi.typeface; setTextColor(Color.WHITE) }
-        val text = TextView(ctx).apply {
-            setTextColor(Color.WHITE)
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            fontFeatureSettings = "tnum" // cyfry o stałej szerokości – sekundy nie "skaczą"
-            includeFontPadding = false
+        // zegar i 3 pola na encje – w dowolnym miejscu
+        for (name in ELEMENTS) {
+            val icon = TextView(ctx).apply { includeFontPadding = false }
+            val text = TextView(ctx).apply {
+                includeFontPadding = false
+                fontFeatureSettings = "tnum" // cyfry o stałej szerokości
+            }
+            val pill = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = GradientDrawable()
+                addView(icon)
+                addView(text)
+            }
+            r.addView(pill, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.LEFT
+            ))
+            pill.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> position(name) }
+            elements[name] = Element(pill, icon, text)
         }
-        clockIcon = icon
-        clockText = text
-        clockPill = pill().apply { addView(icon); addView(text) }
-        tilesBox = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        r.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> for (n in ELEMENTS) position(n) }
 
         try {
             wm.addView(r, lp)
         } catch (e: Exception) {
             Log.e(tag, "Nie można dodać nakładki", e)
-            corners.clear()
+            corners.clear(); elements.clear()
             return false
         }
         root = r
-        applyClockStyle()
-        placeBoxes()
+        current = this
+        refreshAll()
         handler.post(clockTick)
         return true
     }
@@ -180,8 +282,8 @@ class OverlayManager(private val ctx: Context) {
         stopCameras()
         root?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         root = null
-        corners.clear()
-        tiles.clear(); tileExpiry.clear()
+        if (current === this) current = null
+        corners.clear(); elements.clear()
         notifications.clear(); notificationExpiry.clear()
     }
 
@@ -203,52 +305,88 @@ class OverlayManager(private val ctx: Context) {
         return if (corners.containsKey(v)) v else def
     }
 
-    /** Ustawia zegar i kafelki w odpowiednich rogach oraz marginesy. */
-    private fun placeBoxes() {
-        val clock = clockPill ?: return
-        val tb = tilesBox ?: return
-        (clock.parent as? ViewGroup)?.removeView(clock)
-        (tb.parent as? ViewGroup)?.removeView(tb)
-
-        val m = ctx.dp(margin)
-        for ((_, box) in corners) {
-            (box.layoutParams as FrameLayout.LayoutParams).setMargins(m, m, m, m)
-            box.requestLayout()
-        }
-
-        val cc = normalizeCorner(clockCorner, "top_end")
-        val tc = normalizeCorner(tilesCorner, cc)
-        val clockBox = corners[cc]!!
-        val tilesTarget = corners[tc]!!
-
-        if (clockCfg().optBoolean("visible", true)) clockBox.addView(clock, 0)
-        if (tc == cc) {
-            val idx = if (clock.parent == clockBox) 1 else 0
-            tilesTarget.addView(tb, idx)
-        } else {
-            tilesTarget.addView(tb, 0)
-        }
-    }
-
-    private fun pill(bg: Int = Color.parseColor("#99000000")): LinearLayout =
-        LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(ctx.dp(14f), ctx.dp(6f), ctx.dp(14f), ctx.dp(6f))
-            background = GradientDrawable().apply {
-                cornerRadius = ctx.dp(12f).toFloat()
-                setColor(bg)
+    fun typeface(font: String, bold: Boolean): Typeface {
+        if (font.startsWith("asset:")) {
+            val n = font.removePrefix("asset:")
+            val tf = assetFonts.getOrPut(n) {
+                try { Typeface.createFromAsset(ctx.assets, "fonts/$n.ttf") } catch (e: Exception) { Typeface.DEFAULT }
             }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = ctx.dp(6f) }
+            return tf
         }
-
-    private fun setPillColor(v: View, color: Int) {
-        (v.background as? GradientDrawable)?.setColor(color)
+        return Typeface.create(font, if (bold) Typeface.BOLD else Typeface.NORMAL)
     }
 
-    /** Ustawia ikonę: "mdi:nazwa" albo dowolny tekst/emoji. */
+    // ================= zegar i encje =================
+
+    private fun refreshAll() {
+        if (root == null) return
+        for (name in ELEMENTS) styleElement(name)
+        for (b in corners.values) {
+            val m = ctx.dp(cfg("general").optDouble("margin", 24.0).toFloat())
+            (b.layoutParams as FrameLayout.LayoutParams).setMargins(m, m, m, m)
+            b.requestLayout()
+        }
+        applyCameraLayout()
+    }
+
+    private fun styleElement(name: String) {
+        val el = elements[name] ?: return
+        val c = cfg(name)
+        val size = c.optDouble("size", 24.0).toFloat()
+        val content = contents[name]
+        val color = parseColor(
+            content?.color?.takeIf { it.isNotBlank() } ?: c.optString("color"), Color.WHITE
+        )
+        val tf = typeface(c.optString("font", "sans-serif"), c.optBoolean("bold", false))
+
+        el.text.typeface = tf
+        el.text.setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
+        el.text.setTextColor(color)
+
+        val iconName = if (name == "clock") c.optString("icon", "") else (content?.icon ?: "")
+        setIcon(el.icon, iconName, size, color)
+
+        val bg = parseColor(c.optString("background"), Color.parseColor("#99000000"))
+        (el.pill.background as GradientDrawable).apply {
+            setColor(bg)
+            cornerRadius = ctx.dp(size * 0.45f).toFloat()
+            setStroke(if (editMode) ctx.dp(2f) else 0, Color.parseColor("#FF18BCF2"))
+        }
+        val padH = ctx.dp(size * 0.5f)
+        val padV = ctx.dp(size * 0.22f)
+        el.pill.setPadding(padH, padV, padH, padV)
+
+        if (name == "clock") {
+            clockFormat = try {
+                SimpleDateFormat(c.optString("format", "HH:mm:ss"), Locale("pl", "PL"))
+            } catch (e: Exception) {
+                SimpleDateFormat("HH:mm:ss", Locale("pl", "PL"))
+            }
+            el.text.text = clockFormat.format(Date())
+            el.pill.visibility = if (c.optBoolean("visible", true)) View.VISIBLE else View.GONE
+        } else {
+            val txt = content?.text ?: ""
+            val show = c.optBoolean("visible", true) && (txt.isNotEmpty() || editMode)
+            el.text.text = if (txt.isEmpty() && editMode) ELEMENT_NAMES[name] else txt
+            el.pill.visibility = if (show) View.VISIBLE else View.GONE
+        }
+        position(name)
+    }
+
+    /** Ustawia element w miejscu x%, y% ekranu (z marginesem bezpieczeństwa). */
+    private fun position(name: String) {
+        val r = root ?: return
+        val el = elements[name] ?: return
+        val c = cfg(name)
+        val m = ctx.dp(cfg("general").optDouble("margin", 24.0).toFloat())
+        val x = c.optDouble("x", 100.0).coerceIn(0.0, 100.0) / 100.0
+        val y = c.optDouble("y", 0.0).coerceIn(0.0, 100.0) / 100.0
+        val freeW = (r.width - 2 * m - el.pill.width).coerceAtLeast(0)
+        val freeH = (r.height - 2 * m - el.pill.height).coerceAtLeast(0)
+        el.pill.translationX = (m + freeW * x).toFloat()
+        el.pill.translationY = (m + freeH * y).toFloat()
+    }
+
     private fun setIcon(tv: TextView, icon: String?, sizeSp: Float, color: Int) {
         if (icon.isNullOrBlank()) {
             tv.visibility = View.GONE
@@ -264,109 +402,89 @@ class OverlayManager(private val ctx: Context) {
         }
         tv.setTextColor(color)
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-        tv.setPadding(0, 0, ctx.dp(8f), 0)
+        tv.setPadding(0, 0, ctx.dp(sizeSp * 0.35f), 0)
         tv.visibility = if (tv.text.isNullOrEmpty()) View.GONE else View.VISIBLE
-    }
-
-    // ---------- zegar ----------
-
-    private fun applyClockStyle() {
-        val c = clockCfg()
-        val size = c.optDouble("size", 30.0).toFloat()
-        val color = parseColor(c.optString("color", ""), Color.WHITE)
-        clockFormat = try {
-            SimpleDateFormat(c.optString("format", "HH:mm:ss"), Locale("pl", "PL"))
-        } catch (e: Exception) {
-            SimpleDateFormat("HH:mm:ss", Locale("pl", "PL"))
-        }
-        clockText?.apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
-            setTextColor(color)
-        }
-        clockIcon?.let { setIcon(it, c.optString("icon", ""), size * 0.9f, color) }
-        clockPill?.let { setPillColor(it, parseColor(c.optString("background", ""), Color.parseColor("#99000000"))) }
-        clockText?.text = clockFormat.format(Date())
     }
 
     private val clockTick = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
-            clockText?.text = clockFormat.format(Date(now))
-            // następne odświeżenie tuż po pełnej sekundzie
+            elements["clock"]?.text?.text = clockFormat.format(Date(now))
             handler.postDelayed(this, 1000 - (now % 1000) + 10)
         }
     }
 
-    // ---------- kafelki ----------
+    /** Zamienia "1", 1, "e1", "encja1" na "e1". */
+    private fun slotName(v: Any?): String? {
+        val s = v?.toString()?.trim()?.lowercase() ?: return null
+        val digit = s.lastOrNull { it.isDigit() } ?: return null
+        val n = "e$digit"
+        return if (n in contents) n else null
+    }
 
-    fun setTile(j: JSONObject): String {
-        val id = j.optString("id", "").ifEmpty { "tile_" + System.currentTimeMillis() }
+    /** Treść pola: {slot:1, text, icon, color, expiration, visible:false = wyczyść}. */
+    fun setEntity(j: JSONObject): String {
+        val slot = slotName(if (j.has("slot")) j.opt("slot") else j.opt("id"))
+            ?: throw IllegalArgumentException("Podaj slot: 1, 2 albo 3")
         if (j.has("visible") && !j.optBoolean("visible", true)) {
-            removeTile(id)
-            return id
+            clearEntity(slot)
+            return slot
         }
-        val box = tilesBox ?: return id
-        val t = tilesCfg()
-        val size = j.optDouble("size", t.optDouble("size", 24.0)).toFloat()
-        val color = parseColor(j.optString("color", ""), parseColor(t.optString("color", ""), Color.WHITE))
-        val bg = parseColor(j.optString("background", ""), parseColor(t.optString("background", ""), Color.parseColor("#99000000")))
-        val text = j.optString("text", j.optString("message", ""))
+        val c = contents[slot]!!
+        c.text = j.optString("text", j.optString("message", ""))
+        c.icon = j.optString("icon", "")
+        c.color = j.optString("color", "")
 
-        val view = tiles[id] ?: pill().also { p ->
-            p.addView(TextView(ctx))
-            p.addView(TextView(ctx).apply {
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                fontFeatureSettings = "tnum"
-                includeFontPadding = false
-            })
-            box.addView(p)
-            tiles[id] = p
-        }
-        val p = view as LinearLayout
-        setPillColor(p, bg)
-        setIcon(p.getChildAt(0) as TextView, j.optString("icon", ""), size, color)
-        (p.getChildAt(1) as TextView).apply {
-            this.text = text
-            setTextColor(color)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
-        }
-
-        tileExpiry.remove(id)?.let { handler.removeCallbacks(it) }
+        contentExpiry.remove(slot)?.let { handler.removeCallbacks(it) }
         val secs = parseSeconds(if (j.has("expiration")) j.opt("expiration") else null, 0)
         if (secs > 0) {
-            val r = Runnable { removeTile(id) }
-            tileExpiry[id] = r
+            val r = Runnable { clearEntity(slot) }
+            contentExpiry[slot] = r
             handler.postDelayed(r, secs * 1000)
         }
-        return id
+        styleElement(slot)
+        return slot
     }
 
-    fun removeTile(id: String) {
-        tileExpiry.remove(id)?.let { handler.removeCallbacks(it) }
-        tiles.remove(id)?.let { (it.parent as? ViewGroup)?.removeView(it) }
+    fun clearEntity(slotOrAll: Any?) {
+        val list = if (slotOrAll == null || slotOrAll.toString().isBlank()) contents.keys.toList()
+        else listOfNotNull(slotName(slotOrAll))
+        for (s in list) {
+            contentExpiry.remove(s)?.let { handler.removeCallbacks(it) }
+            contents[s] = Content()
+            styleElement(s)
+        }
     }
 
-    fun clearTiles() {
-        for (id in tiles.keys.toList()) removeTile(id)
+    fun entitiesJson(): JSONObject = JSONObject().also { o ->
+        for ((k, v) in contents) o.put(k, JSONObject().put("text", v.text).put("icon", v.icon).put("color", v.color))
     }
 
-    fun tileIds(): List<String> = tiles.keys.toList()
-
-    // ---------- powiadomienia ----------
+    // ================= powiadomienia =================
 
     fun notify(j: JSONObject): String {
         val id = j.optString("id", "").ifEmpty { "n_" + System.currentTimeMillis() }
-        val n = notifyCfg()
-        val corner = normalizeCorner(j.optString("corner", n.optString("corner", "top_end")), "top_end")
+        val n = cfg("notify")
+        val corner = normalizeCorner(j.optString("corner", n.optString("corner")), "top_start")
         val size = j.optDouble("size", n.optDouble("size", 22.0)).toFloat()
         val color = parseColor(j.optString("color", ""), Color.WHITE)
-        val bg = parseColor(j.optString("background", ""), parseColor(n.optString("background", ""), Color.parseColor("#CC101820")))
+        val bg = parseColor(j.optString("background", ""), parseColor(n.optString("background"), Color.parseColor("#CC101820")))
         val duration = parseSeconds(j.opt("duration"), n.optLong("duration", 8))
+        val tf = typeface(n.optString("font", "sans-serif"), false)
 
         removeNotification(id)
 
-        val card = pill(bg).apply {
+        val card = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(ctx.dp(18f), ctx.dp(12f), ctx.dp(18f), ctx.dp(12f))
+            background = GradientDrawable().apply {
+                cornerRadius = ctx.dp(12f).toFloat()
+                setColor(bg)
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = ctx.dp(6f); bottomMargin = ctx.dp(6f) }
         }
         val icon = TextView(ctx)
         setIcon(icon, j.optString("icon", ""), size * 1.6f, color)
@@ -379,13 +497,14 @@ class OverlayManager(private val ctx: Context) {
             text = title
             setTextColor(color)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            typeface = Typeface.create(tf, Typeface.BOLD)
             maxWidth = ctx.dp(520f)
         })
         if (message.isNotBlank()) col.addView(TextView(ctx).apply {
             text = message
             setTextColor(color)
             alpha = 0.9f
+            typeface = tf
             setTextSize(TypedValue.COMPLEX_UNIT_SP, size * 0.8f)
             maxWidth = ctx.dp(520f)
             maxLines = 4
@@ -410,36 +529,29 @@ class OverlayManager(private val ctx: Context) {
         notifications.remove(id)?.let { (it.parent as? ViewGroup)?.removeView(it) }
     }
 
-    // ---------- kamery ----------
+    // ================= kamery (zawsze na dole) =================
 
-    /**
-     * Pokazuje 1..N okienek z kamerami obok siebie.
-     * streams: lista adresów (rtsp://, http(s)://...m3u8)
-     */
     fun showCameras(j: JSONObject) {
-        val c = cameraCfg()
+        val c = cfg("camera")
         val list = mutableListOf<String>()
         val labels = mutableListOf<String>()
         val arr: JSONArray? = j.optJSONArray("streams")
         if (arr != null) for (i in 0 until arr.length()) {
             val item = arr.opt(i)
             if (item is JSONObject) {
-                list.add(item.optString("url"))
-                labels.add(item.optString("label", ""))
-            } else {
-                list.add(item.toString())
-                labels.add("")
+                list.add(item.optString("url")); labels.add(item.optString("label", ""))
+            } else if (item != null && item.toString().isNotBlank()) {
+                list.add(item.toString()); labels.add("")
             }
         }
-        if (j.has("url")) { list.add(j.optString("url")); labels.add(j.optString("label", "")) }
-        if (list.isEmpty()) return
+        if (j.optString("url").isNotBlank()) { list.add(j.optString("url")); labels.add(j.optString("label", "")) }
+        if (list.isEmpty()) throw IllegalArgumentException("Brak adresów kamer (streams)")
 
         val maxSec = c.optLong("max_seconds", 30)
         val wanted = parseSeconds(j.opt("duration"), maxSec)
         val duration = if (maxSec > 0) minOf(wanted, maxSec) else wanted
         val widthDp = j.optDouble("width", c.optDouble("width", 400.0)).toFloat()
         val gapDp = c.optDouble("gap", 10.0).toFloat()
-        val position = normalizeCorner(j.optString("position", c.optString("position", "bottom_end")), "bottom_end")
 
         stopCameras()
         val r = root ?: return
@@ -449,12 +561,11 @@ class OverlayManager(private val ctx: Context) {
         val h = w * 9 / 16
         list.forEachIndexed { i, url ->
             val cell = FrameLayout(ctx).apply {
-                setBackgroundColor(Color.BLACK)
-                clipToOutline = true
                 background = GradientDrawable().apply {
                     cornerRadius = ctx.dp(10f).toFloat()
                     setColor(Color.BLACK)
                 }
+                clipToOutline = true
             }
             val tv = TextureView(ctx)
             cell.addView(tv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -477,15 +588,28 @@ class OverlayManager(private val ctx: Context) {
             startPlayer(url, tv)
         }
 
-        val m = ctx.dp(margin)
-        r.addView(row, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            cornerGravity(position)
-        ).apply { setMargins(m, m, m, m) })
+        r.addView(row, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         cameraRow = row
+        applyCameraLayout()
 
         handler.removeCallbacks(stopCamerasRunnable)
         if (duration > 0) handler.postDelayed(stopCamerasRunnable, duration * 1000)
+    }
+
+    /** Kamery zawsze przy dolnej krawędzi; wyrównanie poziome z ustawień. */
+    private fun applyCameraLayout() {
+        val row = cameraRow ?: return
+        val c = cfg("camera")
+        val align = when (c.optString("align", "center")) {
+            "start", "left" -> Gravity.START
+            "end", "right" -> Gravity.END
+            else -> Gravity.CENTER_HORIZONTAL
+        }
+        val m = ctx.dp(cfg("general").optDouble("margin", 24.0).toFloat())
+        val lp = row.layoutParams as FrameLayout.LayoutParams
+        lp.gravity = Gravity.BOTTOM or align
+        lp.setMargins(m, m, m, ctx.dp(c.optDouble("bottom", 24.0).toFloat()))
+        row.layoutParams = lp
     }
 
     private fun buildSource(url: String): MediaSource {

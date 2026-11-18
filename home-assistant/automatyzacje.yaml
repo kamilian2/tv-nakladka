@@ -1,36 +1,39 @@
 # Każdą automatyzację wklejasz osobno:
 # Ustawienia → Automatyzacje → Utwórz → ⋮ → Edytuj w YAML
 
-# --- 1. Produkcja PV jako kafelek pod zegarem ---
-alias: "TV: kafelek PV"
+# --- 1. Pola na encje: pogoda, PV, zmywarka ---
+alias: "TV: pola z encjami"
 mode: queued
 triggers:
   - trigger: state
-    entity_id: sensor.produkcja_pv1_pv2
+    entity_id:
+      - sensor.siedlce_temperatura
+      - sensor.produkcja_pv1_pv2
+      - binary_sensor.zmywarka_status
   - trigger: time_pattern
-    minutes: "/15"
+    minutes: "/10"
   - trigger: homeassistant
     event: start
 actions:
-  - variables:
-      pv: "{{ states('sensor.produkcja_pv1_pv2') | int(0) }}"
-  - if:
-      - condition: template
-        value_template: "{{ pv > 50 }}"
-    then:
-      - action: rest_command.tv_kafelek
-        continue_on_error: true
-        data:
-          id: "pv"
-          text: "{{ pv }} W"
-          icon: "mdi:solar-power"
-          color: "#FFD54F"
-          expiration: "1h"
-    else:
-      - action: rest_command.tv_kafelek_usun
-        continue_on_error: true
-        data:
-          id: "pv"
+  - action: rest_command.tv_encja
+    continue_on_error: true
+    data:
+      slot: 1
+      text: "{{ states('sensor.siedlce_temperatura') | float(0) | round(1) }} °C"
+      icon: "mdi:thermometer"
+  - action: rest_command.tv_encja
+    continue_on_error: true
+    data:
+      slot: 2
+      text: "{{ states('sensor.produkcja_pv1_pv2') | int(0) }} W"
+      icon: "mdi:solar-power"
+      color: "{{ '#FFD54F' if states('sensor.produkcja_pv1_pv2') | int(0) > 50 else '#B0BEC5' }}"
+  - action: rest_command.tv_encja
+    continue_on_error: true
+    data:
+      slot: 3
+      text: "{{ 'Zmywarka pracuje' if is_state('binary_sensor.zmywarka_status', 'on') else 'Zmywarka gotowa' }}"
+      icon: "mdi:dishwasher"
 
 ---
 # --- 2. Trzy kamery na dole ekranu przy ruchu (maks. 30 s) ---
@@ -45,8 +48,6 @@ actions:
     continue_on_error: true
     data:
       duration: 30
-      width: 420
-      position: "bottom_center"
       streams:
         - "rtsp://LOGIN:HASLO@IP_KAMERY1:554/SCIEZKA"
         - "rtsp://LOGIN:HASLO@IP_KAMERY2:554/SCIEZKA"
@@ -54,7 +55,7 @@ actions:
   - delay: "00:01:00"
 
 ---
-# --- 3. Zmywarka skończyła ---
+# --- 3. Zmywarka skończyła – powiadomienie ---
 alias: "TV: zmywarka skończyła"
 triggers:
   - trigger: state

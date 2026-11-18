@@ -1,6 +1,6 @@
 # TV Nakładka
 
-Nakładka na Android TV sterowana z Home Assistanta: zegar z sekundami, kafelki z encjami,
+Nakładka na Android TV sterowana z Home Assistanta: zegar z sekundami, 3 pola na encje w dowolnym miejscu ekranu,
 powiadomienia i do kilku kamer RTSP naraz w osobnych okienkach.
 
 ## Instalacja
@@ -16,21 +16,32 @@ powiadomienia i do kilku kamer RTSP naraz w osobnych okienkach.
    ```
 3. Kolejne wersje: tylko `adb install -r tv-nakladka.apk` (ustawienia zostają).
 
+## Ustawienia
+
+Wszystko można zmienić na trzy sposoby:
+- **na telewizorze** – otwórz aplikację TV Nakładka (zmiany widać od razu),
+- **w przeglądarce** – http://IP_TELEWIZORA:5002,
+- **z Home Assistanta** – `POST /settings`.
+
 ## API (port 5002, POST z JSON-em)
 
 | Adres | Co robi | Pola |
 |---|---|---|
-| `GET /` | stan aplikacji | – |
-| `/tile` | kafelek pod zegarem | `id`, `text`, `icon` (`mdi:...` lub emoji), `color`, `background`, `size`, `expiration` (`30`, `"5m"`, `"1h"`), `visible:false` = usuń |
-| `/tile/clear` | usuń kafelek | `id` (puste = wszystkie) |
-| `/notify` | powiadomienie | `id`, `title`, `message`, `icon`, `corner`, `duration`, `color`, `background`, `size` |
-| `/camera` | kamery obok siebie | `streams` (lista adresów lub `{url, label}`), `duration` (maks. 30 s), `width` (dp), `position` |
+| `GET /` | strona ustawień | – |
+| `GET /status`, `GET /config` | stan / ustawienia | – |
+| `/settings` | zmiana ustawień | `{"clock":{..}, "e1":{..}, "e2":{..}, "e3":{..}, "camera":{..}, "notify":{..}, "general":{"margin"}}` |
+| `/settings/reset` | ustawienia domyślne | `section` (puste = wszystko) |
+| `/entity` | treść pola 1–3 | `slot`, `text`, `icon` (`mdi:...` lub emoji), `color`, `expiration` (`30`, `"5m"`), `visible:false` = wyczyść |
+| `/entity/clear` | wyczyść pole | `slot` (puste = wszystkie) |
+| `/notify` | powiadomienie | `title`, `message`, `icon`, `corner`, `duration`, `color`, `background`, `size` |
+| `/camera` | kamery na dole | `streams` (lista adresów lub `{url, label}`), `duration` |
 | `/camera/stop` | zamknij kamery | – |
-| `/clock` | zegar | `visible`, `corner`, `format` (np. `"HH:mm:ss"`), `size`, `color`, `background`, `icon` |
-| `/settings` | wszystko naraz | `{clock:{..}, tiles:{corner,size,color,background}, notify:{corner,duration,size,background}, camera:{max_seconds,width,gap,position}, margin}` |
+| `/edit` | tryb edycji (widać puste pola) | `on`, `seconds` |
 
-Rogi: `top_start`, `top_center`, `top_end`, `bottom_start`, `bottom_center`, `bottom_end`.
+Ustawienia elementu (`clock`, `e1`–`e3`): `visible`, `x`, `y` (0–100 %), `size`, `font`, `bold`, `color`, `background` (`#AARRGGBB`), `format` (tylko zegar).
+Czcionki: `sans-serif`, `sans-serif-medium`, `sans-serif-black`, `sans-serif-light`, `sans-serif-thin`, `sans-serif-condensed`, `serif`, `monospace`, `casual`, `cursive`, `asset:dseg7`, `asset:dseg14`.
+Kamery (`camera`): `width`, `gap`, `align` (`start`/`center`/`end`), `bottom`, `max_seconds`.
 
 Gotowy kod dla Home Assistanta jest w folderze `home-assistant/`.
 
-Ikony: [Material Design Icons](https://pictogrammers.com/library/mdi/) (licencja Apache 2.0).
+Ikony: [Material Design Icons](https://pictogrammers.com/library/mdi/) (Apache 2.0). Czcionki cyfrowe: DSEG (SIL OFL 1.1).

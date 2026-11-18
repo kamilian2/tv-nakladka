@@ -1,28 +1,28 @@
-# Wklej do configuration.yaml (zamiast poprzedniej sekcji rest_command dla TvOverlay)
+# Wklej do configuration.yaml (zamiast poprzedniej sekcji rest_command)
 # IP telewizora: 192.168.1.114, port aplikacji TV Nakładka: 5002
+# Strona ustawień w przeglądarce: http://192.168.1.114:5002
 
 rest_command:
-  # Kafelek pod zegarem (dodaje albo aktualizuje kafelek o danym id)
-  tv_kafelek:
-    url: "http://192.168.1.114:5002/tile"
+  # Treść jednego z 3 pól na encje (slot 1, 2 lub 3)
+  tv_encja:
+    url: "http://192.168.1.114:5002/entity"
     method: POST
     content_type: "application/json; charset=utf-8"
     timeout: 5
     payload: >
-      {{ {"id": id,
-          "text": text | default(message | default("")),
+      {{ {"slot": slot,
+          "text": text | default(""),
           "icon": icon | default(""),
           "color": color | default(""),
-          "background": background | default(""),
           "expiration": expiration | default(0)} | to_json }}
 
-  # Usunięcie kafelka (bez id = wszystkie)
-  tv_kafelek_usun:
-    url: "http://192.168.1.114:5002/tile/clear"
+  # Wyczyszczenie pola (bez slot = wszystkie)
+  tv_encja_wyczysc:
+    url: "http://192.168.1.114:5002/entity/clear"
     method: POST
     content_type: "application/json; charset=utf-8"
     timeout: 5
-    payload: '{{ {"id": id | default("")} | to_json }}'
+    payload: '{{ {"slot": slot | default("")} | to_json }}'
 
   # Wyskakujące powiadomienie
   tv_powiadomienie:
@@ -34,27 +34,23 @@ rest_command:
       {{ {"title": title | default(""),
           "message": message | default(""),
           "icon": icon | default("mdi:home-assistant"),
-          "corner": corner | default("top_end"),
           "duration": duration | default(10)} | to_json }}
 
-  # Kamery – 1 do 3 okienek obok siebie, maks. 30 s
+  # Kamery – zawsze na dole ekranu, maks. 30 s (ustawiane na TV / na stronie)
   tv_kamery:
     url: "http://192.168.1.114:5002/camera"
     method: POST
     content_type: "application/json; charset=utf-8"
     timeout: 5
     payload: >
-      {{ {"streams": streams,
-          "duration": duration | default(30),
-          "width": width | default(400),
-          "position": position | default("bottom_end")} | to_json }}
+      {{ {"streams": streams, "duration": duration | default(30)} | to_json }}
 
   tv_kamery_stop:
     url: "http://192.168.1.114:5002/camera/stop"
     method: POST
     timeout: 5
 
-  # Dowolne ustawienia (zegar, kafelki, kamery) – zapisywane na stałe w TV
+  # Zmiana ustawień (położenie, czcionki, kolory) z HA
   tv_ustawienia:
     url: "http://192.168.1.114:5002/settings"
     method: POST

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV Nakładka – ustawienia</title>
+<style>
+  :root { --bg:#0b1722; --card:#13263a; --line:#21405c; --txt:#e8f1f8; --mut:#8fb0c8; --acc:#18bcf2; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--txt); }
+  header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:22px; }
+  header span { color:var(--mut); font-size:14px; }
+  nav { display:flex; gap:6px; padding:12px 24px; flex-wrap:wrap; }
+  nav button { background:var(--card); color:var(--txt); border:1px solid var(--line); padding:8px 14px; border-radius:8px; cursor:pointer; font-size:14px; }
+  nav button.on { background:var(--acc); border-color:var(--acc); color:#04212e; font-weight:600; }
+  main { padding:0 24px 40px; max-width:900px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px; margin-top:12px; }
+  .card h2 { margin:0 0 12px; font-size:17px; }
+  .row { display:grid; grid-template-columns: 220px 1fr 70px; gap:12px; align-items:center; padding:7px 0; border-top:1px solid #1a3149; }
+  .row:first-of-type { border-top:none; }
+  .row label { color:var(--mut); font-size:14px; }
+  .row input[type=range] { width:100%; accent-color:var(--acc); }
+  .row output { text-align:right; font-variant-numeric: tabular-nums; }
+  select, input[type=text], input[type=number], textarea {
+    background:#0d1d2c; color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-size:14px; width:100%;
+  }
+  textarea { min-height:90px; font-family: ui-monospace, Consolas, monospace; }
+  .inline { display:flex; gap:8px; align-items:center; }
+  .inline input[type=color] { width:44px; height:34px; border:none; background:none; padding:0; }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .btns button { background:#21405c; color:var(--txt); border:none; padding:9px 14px; border-radius:8px; cursor:pointer; font-size:14px; }
+  .btns button.main { background:var(--acc); color:#04212e; font-weight:600; }
+  .hint { color:var(--mut); font-size:13px; margin-top:8px; line-height:1.5; }
+  pre { background:#0d1d2c; border:1px solid var(--line); border-radius:8px; padding:12px; overflow:auto; font-size:12.5px; }
+  #toast { position:fixed; right:18px; bottom:18px; background:var(--acc); color:#04212e; padding:10px 14px; border-radius:8px; font-weight:600; opacity:0; transition:opacity .2s; }
+  #toast.show { opacity:1; }
+  #toast.err { background:#e57373; }
+  @media (max-width:640px){ .row { grid-template-columns: 1fr; } .row output { text-align:left; } }
+</style>
+</head>
+<body>
+<header><h1>TV Nakładka</h1><span id="ver"></span><span>Zmiany widać od razu na telewizorze.</span></header>
+<nav id="tabs"></nav>
+<main id="main"></main>
+<div id="toast"></div>
+
+<script>
+const TABS = [["clock","Zegar"],["e1","Encja 1"],["e2","Encja 2"],["e3","Encja 3"],["camera","Kamery"],["other","Inne"],["ha","Home Assistant"]];
+let S = null, tab = "clock", timers = {};
+
+const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function toast(msg, err) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "show" + (err ? " err" : "");
+  clearTimeout(timers.toast); timers.toast = setTimeout(() => t.className = "", 1400);
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({ ok:false, error:"Brak odpowiedzi" }));
+  if (!j.ok) toast(j.error || "Błąd", true);
+  return j;
+}
+
+function save(sec, key, val) {
+  S.config[sec][key] = val;
+  const id = sec + "." + key;
+  clearTimeout(timers[id]);
+  timers[id] = setTimeout(() => api("/settings", { [sec]: { [key]: val } }), 120);
+}
+
+// ---------- pola formularza ----------
+function range(sec, key, label, min, max, step) {
+  const v = S.config[sec][key];
+  const el = $(`<div class="row"><label>${label}</label><input type="range" min="${min}" max="${max}" step="${step||1}" value="${v}"><output>${v}</output></div>`);
+  const inp = el.querySelector("input"), out = el.querySelector("output");
+  inp.oninput = () => { out.textContent = inp.value; save(sec, key, Number(inp.value)); };
+  return el;
+}
+function check(sec, key, label) {
+  const el = $(`<div class="row"><label>${label}</label><div><input type="checkbox" ${S.config[sec][key] ? "checked" : ""}></div><output></output></div>`);
+  el.querySelector("input").onchange = (e) => save(sec, key, e.target.checked);
+  return el;
+}
+function select(sec, key, label, opts) {
+  const v = S.config[sec][key];
+  const known = opts.some(o => o.value === v);
+  const html = opts.map(o => `<option value="${esc(o.value)}" ${o.value === v ? "selected" : ""}>${esc(o.name)}</option>`).join("")
+             + (known ? "" : `<option value="${esc(v)}" selected>${esc(v)}</option>`);
+  const el = $(`<div class="row"><label>${label}</label><select>${html}</select><output></output></div>`);
+  el.querySelector("select").onchange = (e) => save(sec, key, e.target.value);
+  return el;
+}
+function color(sec, key, label, presets) {
+  const v = S.config[sec][key] || "#FFFFFF";
+  const hex6 = "#" + v.replace("#","").slice(-6);
+  const el = $(`<div class="row"><label>${label}</label>
+      <div class="inline"><input type="color" value="${hex6}"><select>${presets.map(o => `<option value="${o.value}" ${o.value.toUpperCase()===v.toUpperCase()?"selected":""}>${esc(o.name)}</option>`).join("")}<option value="">własny…</option></select>
+      <input type="text" value="${esc(v)}" style="width:120px"></div><output></output></div>`);
+  const [picker, sel, txt] = el.querySelectorAll("input[type=color], select, input[type=text]");
+  picker.oninput = () => { const alpha = (txt.value.replace("#","").length === 8) ? txt.value.replace("#","").slice(0,2) : ""; txt.value = "#" + alpha.toUpperCase() + picker.value.slice(1).toUpperCase(); save(sec, key, txt.value); };
+  sel.onchange = () => { if (sel.value) { txt.value = sel.value; picker.value = "#" + sel.value.replace("#","").slice(-6); save(sec, key, sel.value); } };
+  txt.onchange = () => { save(sec, key, txt.value.trim()); };
+  return el;
+}
+function card(title, ...children) {
+  const c = $(`<div class="card"><h2>${title}</h2></div>`);
+  children.forEach(ch => c.appendChild(ch));
+  return c;
+}
+function buttons(list) {
+  const b = $(`<div class="btns"></div>`);
+  list.forEach(([label, fn, main]) => { const x = $(`<button class="${main?"main":""}">${label}</button>`); x.onclick = fn; b.appendChild(x); });
+  return b;
+}
+async function reset(sections) {
+  for (const s of sections) await api("/settings/reset", { section: s });
+  await load(); toast("Przywrócono domyślne");
+}
+
+// ---------- zakładki ----------
+function render() {
+  const nav = document.getElementById("tabs"); nav.innerHTML = "";
+  TABS.forEach(([k, n]) => { const b = $(`<button class="${k===tab?"on":""}">${n}</button>`); b.onclick = () => { tab = k; render(); }; nav.appendChild(b); });
+  const m = document.getElementById("main"); m.innerHTML = "";
+  const fonts = S.fonts, colors = S.colors, bgs = S.backgrounds;
+
+  if (["clock","e1","e2","e3"].includes(tab)) {
+    const sec = tab;
+    const look = card("Wygląd i położenie",
+      check(sec, "visible", "Widoczny"),
+      range(sec, "x", "Poziomo (0 = lewo, 100 = prawo)", 0, 100, 0.5),
+      range(sec, "y", "Pionowo (0 = góra, 100 = dół)", 0, 100, 0.5),
+      range(sec, "size", "Wielkość czcionki", 10, 160, 1),
+      select(sec, "font", "Krój czcionki", fonts),
+      check(sec, "bold", "Pogrubienie"),
+      color(sec, "color", "Kolor tekstu", colors),
+      color(sec, "background", "Tło (#AARRGGBB)", bgs));
+    if (sec === "clock") {
+      look.appendChild(select(sec, "format", "Format godziny", S.formats.map(f => ({ value:f, name:f }))));
+      const fr = $(`<div class="row"><label>Własny format</label><input type="text" placeholder="np. HH:mm:ss  EEEE" value="${esc(S.config.clock.format)}"><output></output></div>`);
+      fr.querySelector("input").onchange = (e) => save("clock", "format", e.target.value);
+      look.appendChild(fr);
+      look.appendChild($(`<div class="hint">HH – godzina, mm – minuty, ss – sekundy, EEE – dzień tygodnia (skrót), EEEE – pełna nazwa, d.MM.yyyy – data. Czcionki cyfrowe pokazują tylko cyfry i dwukropek.</div>`));
+    }
+    look.appendChild(buttons([["Przywróć domyślne", () => reset([sec])]]));
+    m.appendChild(look);
+
+    if (sec !== "clock") {
+      const n = sec.slice(1), cur = (S.entities || {})[sec] || {};
+      const t = card(`Podgląd – wyślij treść do pola ${n}`,
+        $(`<div class="row"><label>Tekst</label><input id="tt" type="text" value="${esc(cur.text || "12 °C")}"><output></output></div>`),
+        $(`<div class="row"><label>Ikona (mdi:…)</label><input id="ti" type="text" value="${esc(cur.icon || "mdi:weather-partly-cloudy")}"><output></output></div>`));
+      t.appendChild(buttons([
+        ["Wyślij", () => api("/entity", { slot:n, text:document.getElementById("tt").value, icon:document.getElementById("ti").value }).then(j => j.ok && toast("Wysłano")), true],
+        ["Wyczyść", () => api("/entity/clear", { slot:n })]
+      ]));
+      t.appendChild($(`<div class="hint">Na stałe treść wysyła Home Assistant – zakładka „Home Assistant”. Lista ikon: pictogrammers.com/library/mdi</div>`));
+      m.appendChild(t);
+    }
+  }
+
+  if (tab === "camera") {
+    const c = card("Kamery (zawsze na dole ekranu)",
+      range("camera", "width", "Szerokość okienka", 160, 900, 10),
+      range("camera", "gap", "Odstęp między okienkami", 0, 80, 1),
+      select("camera", "align", "Wyrównanie", [{value:"start",name:"Do lewej"},{value:"center",name:"Na środku"},{value:"end",name:"Do prawej"}]),
+      range("camera", "bottom", "Odległość od dołu", 0, 400, 2),
+      range("camera", "max_seconds", "Maksymalny czas (s)", 5, 120, 1));
+    c.appendChild(buttons([["Przywróć domyślne", () => reset(["camera"])]]));
+    m.appendChild(c);
+    const saved = localStorage.getItem("cams") || "";
+    const t = card("Test kamer",
+      $(`<div class="hint">Adresy RTSP – jeden w linii (maks. kilka okienek).</div>`),
+      $(`<textarea id="cams" placeholder="rtsp://login:haslo@192.168.1.50:554/stream2">${esc(saved)}</textarea>`));
+    t.appendChild(buttons([
+      ["Pokaż na TV", () => { const v = document.getElementById("cams").value; try { localStorage.setItem("cams", v); } catch(e){}
+        api("/camera", { streams: v.split(/\n/).map(s => s.trim()).filter(Boolean) }).then(j => j.ok && toast("Wysłano")); }, true],
+      ["Zamknij", () => api("/camera/stop", {})]
+    ]));
+    m.appendChild(t);
+  }
+
+  if (tab === "other") {
+    const corners = [["top_start","Lewy górny"],["top_center","Górny środek"],["top_end","Prawy górny"],["bottom_start","Lewy dolny"],["bottom_center","Dolny środek"],["bottom_end","Prawy dolny"]].map(([value,name]) => ({value,name}));
+    const c = card("Ogólne", range("general", "margin", "Margines od krawędzi ekranu", 0, 120, 1));
+    m.appendChild(c);
+    const n = card("Powiadomienia",
+      select("notify", "corner", "Róg ekranu", corners),
+      range("notify", "size", "Wielkość", 10, 60, 1),
+      range("notify", "duration", "Czas wyświetlania (s)", 2, 120, 1),
+      select("notify", "font", "Krój czcionki", fonts),
+      color("notify", "background", "Tło", bgs));
+    n.appendChild(buttons([
+      ["Wyślij testowe", () => api("/notify", { title:"Test", message:"Powiadomienie z przeglądarki", icon:"mdi:bell" }), true],
+      ["Przywróć domyślne", () => reset(["general","notify"])]
+    ]));
+    m.appendChild(n);
+  }
+
+  if (tab === "ha") {
+    const base = location.protocol + "//" + location.host;
+    m.appendChild(card("Kod do configuration.yaml",
+      $(`<pre>${esc(`rest_command:
+  tv_encja:
+    url: "${base}/entity"
+    method: POST
+    content_type: "application/json; charset=utf-8"
+    timeout: 5
+    payload: >
+      {{ {"slot": slot, "text": text, "icon": icon | default(""),
+          "color": color | default(""), "expiration": expiration | default(0)} | to_json }}
+
+  tv_powiadomienie:
+    url: "${base}/notify"
+    method: POST
+    content_type: "application/json; charset=utf-8"
+    timeout: 5
+    payload: >
+      {{ {"title": title | default(""), "message": message | default(""),
+          "icon": icon | default("mdi:home-assistant"),
+          "duration": duration | default(10)} | to_json }}
+
+  tv_kamery:
+    url: "${base}/camera"
+    method: POST
+    content_type: "application/json; charset=utf-8"
+    timeout: 5
+    payload: '{{ {"streams": streams, "duration": duration | default(30)} | to_json }}'
+
+  tv_ustawienia:
+    url: "${base}/settings"
+    method: POST
+    content_type: "application/json; charset=utf-8"
+    timeout: 5
+    payload: "{{ ustawienia | to_json }}"`)}</pre>`)));
+    m.appendChild(card("Przykład: pogoda w polu 1",
+      $(`<pre>${esc(`action: rest_command.tv_encja
+data:
+  slot: 1
+  text: "{{ states('sensor.siedlce_temperatura') }} °C"
+  icon: "mdi:weather-partly-cloudy"`)}</pre>`)));
+    m.appendChild(card("Przykład: zmiana ustawień z HA",
+      $(`<pre>${esc(`action: rest_command.tv_ustawienia
+data:
+  ustawienia:
+    clock: { x: 100, y: 0, size: 40, font: "asset:dseg7" }
+    e1: { x: 0, y: 0 }`)}</pre>`)));
+  }
+}
+
+async function load() {
+  const j = await api("/config");
+  if (!j.ok) return;
+  S = j;
+  document.getElementById("ver").textContent = "wersja " + j.version;
+  render();
+}
+
+// tryb edycji: na TV widać puste pola z podpisami, dopóki strona jest otwarta
+function editOn() { fetch("/edit", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ on:true, seconds:90 }) }).catch(()=>{}); }
+setInterval(editOn, 60000);
+window.addEventListener("pagehide", () => { try { navigator.sendBeacon("/edit", JSON.stringify({ on:false })); } catch(e){} });
+
+editOn();
+load();
+</script>
+</body>
+</html>

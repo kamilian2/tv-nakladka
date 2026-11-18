@@ -34,6 +34,7 @@ class OverlayService : Service() {
         super.onCreate()
         startForeground(1, buildNotification())
         overlay = OverlayManager(this)
+        OverlayManager.current = overlay
         overlay.attach()
         startServer()
         handler.postDelayed(watchdog, 30_000)
@@ -53,7 +54,7 @@ class OverlayService : Service() {
             val version = try {
                 packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
             } catch (e: Exception) { "?" }
-            ApiServer(API_PORT, overlay, version).also {
+            ApiServer(API_PORT, this, overlay, version).also {
                 it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
             }
         } catch (e: Exception) {

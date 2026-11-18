@@ -1,5 +1,6 @@
 package pl.kamil.tvnakladka
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import fi.iki.elonen.NanoHTTPD
@@ -9,19 +10,23 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * Proste API dla Home Assistanta (POST z JSON-em).
+ * Serwer HTTP: strona ustawień (GET /) i API dla Home Assistanta (POST z JSON-em).
  *
- *  GET  /               stan aplikacji
- *  POST /tile           kafelek: {id, text, icon, color, background, size, expiration, visible}
- *  POST /tile/clear     {id} albo {} = wszystkie
- *  POST /notify         powiadomienie: {id, title, message, icon, corner, duration, color, background, size}
- *  POST /camera         kamery: {streams:[url|{url,label}], duration, width, position}
+ *  GET  /               strona ustawień w przeglądarce
+ *  GET  /status         stan aplikacji
+ *  GET  /config         wszystkie ustawienia + listy czcionek/kolorów
+ *  POST /settings       zmiana ustawień: {"clock":{"size":40,"x":100,"y":0}, "e1":{...}, "camera":{...}}
+ *  POST /settings/reset {"section":"clock"} albo {} = wszystko
+ *  POST /entity         treść pola: {"slot":1, "text":"5 °C", "icon":"mdi:weather-cloudy", "color", "expiration"}
+ *  POST /entity/clear   {"slot":1} albo {} = wszystkie
+ *  POST /notify         powiadomienie: {title, message, icon, corner, duration, color, background, size}
+ *  POST /camera         kamery na dole: {"streams":[url | {url,label}], "duration":30, "width":400}
  *  POST /camera/stop
- *  POST /clock          ustawienia zegara: {visible, corner, format, size, color, background, icon}
- *  POST /settings       wszystkie ustawienia naraz: {clock:{..}, tiles:{..}, notify:{..}, camera:{..}, margin}
+ *  POST /edit           tryb edycji (widać puste pola): {"on":true, "seconds":120}
  */
 class ApiServer(
     port: Int,
+    private val ctx: Context,
     private val overlay: OverlayManager,
     private val versionName: String,
 ) : NanoHTTPD(port) {
@@ -33,12 +38,17 @@ class ApiServer(
             val uri = session.uri.trimEnd('/').ifEmpty { "/" }
             if (session.method == Method.OPTIONS) return json(JSONObject().put("ok", true))
 
+            if (session.method == Method.GET) {
+                return when (uri) {
+                    "/", "/index.html" -> html()
+                    "/status" -> json(onMain { status() })
+                    "/config" -> json(onMain { configWithOptions() })
+                    else -> json(JSONObject().put("ok", false).put("error", "Nieznany adres: $uri"), Response.Status.NOT_FOUND)
+                }
+            }
+
             val body = readBody(session)
             val j = if (body.isBlank()) JSONObject() else JSONObject(body)
-
-            if (session.method == Method.GET && uri == "/") {
-                return json(onMain { status() })
-            }
 
             val result = onMain {
                 if (!overlay.attach()) {
@@ -47,26 +57,30 @@ class ApiServer(
                         .put("error", "Brak uprawnienia 'wyświetlanie nad innymi aplikacjami' – nadaj je przez ADB")
                 }
                 when (uri) {
-                    "/tile", "/notify_fixed" -> ok().put("id", overlay.setTile(j))
-                    "/tile/clear" -> {
-                        val id = j.optString("id", "")
-                        if (id.isEmpty()) overlay.clearTiles() else overlay.removeTile(id)
-                        ok()
+                    "/settings" -> { overlay.updateConfig(j); ok().put("config", overlay.config) }
+                    "/settings/reset" -> {
+                        overlay.resetConfig(j.optString("section", "").ifEmpty { null })
+                        ok().put("config", overlay.config)
                     }
+                    "/clock" -> { overlay.updateConfig(JSONObject().put("clock", j)); ok() }
+                    "/entity", "/tile", "/notify_fixed" -> ok().put("slot", overlay.setEntity(j))
+                    "/entity/clear", "/tile/clear" ->
+                        { overlay.clearEntity(if (j.has("slot")) j.opt("slot") else j.opt("id")); ok() }
                     "/notify" -> ok().put("id", overlay.notify(j))
                     "/notify/clear" -> { overlay.removeNotification(j.optString("id")); ok() }
                     "/camera" -> { overlay.showCameras(j); ok() }
                     "/camera/stop" -> { overlay.stopCameras(); ok() }
-                    "/clock" -> { overlay.updateConfig(JSONObject().put("clock", j)); ok() }
-                    "/settings" -> { overlay.updateConfig(j); ok().put("config", overlay.config) }
-                    "/" -> status()
+                    "/edit" -> {
+                        overlay.setEditMode(j.optBoolean("on", true), parseSeconds(j.opt("seconds"), 120))
+                        ok()
+                    }
                     else -> JSONObject().put("ok", false).put("error", "Nieznany adres: $uri")
                 }
             }
             val httpStatus = if (result.optBoolean("ok", false)) Response.Status.OK else Response.Status.BAD_REQUEST
             json(result, httpStatus)
         } catch (e: Exception) {
-            json(JSONObject().put("ok", false).put("error", e.toString()), Response.Status.INTERNAL_ERROR)
+            json(JSONObject().put("ok", false).put("error", e.message ?: e.toString()), Response.Status.BAD_REQUEST)
         }
     }
 
@@ -79,8 +93,27 @@ class ApiServer(
         .put("permission", overlay.hasPermission())
         .put("overlay", overlay.isAttached)
         .put("cameras", overlay.camerasActive)
-        .put("tiles", JSONArray(overlay.tileIds()))
-        .put("config", overlay.config)
+        .put("entities", overlay.entitiesJson())
+
+    private fun configWithOptions(): JSONObject {
+        fun pairs(list: List<Pair<String, String>>) = JSONArray().also { a ->
+            for ((v, n) in list) a.put(JSONObject().put("value", v).put("name", n))
+        }
+        return JSONObject()
+            .put("ok", true)
+            .put("version", versionName)
+            .put("config", overlay.config)
+            .put("fonts", pairs(OverlayManager.FONTS.toList()))
+            .put("formats", JSONArray(OverlayManager.CLOCK_FORMATS))
+            .put("colors", pairs(OverlayManager.COLORS))
+            .put("backgrounds", pairs(OverlayManager.BACKGROUNDS))
+            .put("entities", overlay.entitiesJson())
+    }
+
+    private fun html(): Response {
+        val page = ctx.assets.open("web/index.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", page)
+    }
 
     /** Czyta treść jako UTF-8 (NanoHTTPD domyślnie psuje polskie znaki). */
     private fun readBody(session: IHTTPSession): String {
@@ -118,6 +151,7 @@ class ApiServer(
     private fun json(o: JSONObject, status: Response.Status = Response.Status.OK): Response {
         val r = newFixedLengthResponse(status, "application/json; charset=utf-8", o.toString())
         r.addHeader("Access-Control-Allow-Origin", "*")
+        r.addHeader("Access-Control-Allow-Headers", "Content-Type")
         return r
     }
 }
