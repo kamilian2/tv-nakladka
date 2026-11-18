@@ -28,6 +28,9 @@ class HaClient(private val overlay: OverlayManager) {
     @Volatile var status: String = "Nie skonfigurowano"
         private set
 
+    /** Stan każdego pola (do podglądu na stronie). */
+    val slotStatus = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     fun start() {
         executor.scheduleWithFixedDelay({ tick() }, 2, 1, TimeUnit.SECONDS)
     }
@@ -67,6 +70,7 @@ class HaClient(private val overlay: OverlayManager) {
         val slots = listOf("e1", "e2", "e3").filter {
             snap.optJSONObject(it)?.optString("entity", "")?.isNotBlank() == true
         }
+        for (s in listOf("e1", "e2", "e3")) if (s !in slots) slotStatus[s] = "brak encji"
         if (slots.isEmpty()) { status = "Brak przypisanych encji"; return }
         if (url.isEmpty() || token.isEmpty()) { status = "Podaj adres i token Home Assistanta"; return }
 
@@ -80,11 +84,20 @@ class HaClient(private val overlay: OverlayManager) {
                 val icon = c.optString("icon", "").ifBlank {
                     st.optJSONObject("attributes")?.optString("icon", "") ?: ""
                 }
-                main.post { overlay.setHaContent(slot, text, icon) }
+                if (text == null) {
+                    slotStatus[slot] = "$entity = ${st.optString("state")} → ukryte (warunek)"
+                    main.post { overlay.setHaContent(slot, "", "") }
+                } else {
+                    slotStatus[slot] = "$entity = ${st.optString("state")} → „$text”"
+                    main.post { overlay.setHaContent(slot, text, icon) }
+                }
             } catch (e: Exception) {
                 errors++
                 Log.w("TvNakladka", "HA $entity: $e")
-                status = "Błąd ($entity): ${e.message ?: e.javaClass.simpleName}"
+                val msg = e.message ?: e.javaClass.simpleName
+                status = "Błąd ($entity): $msg"
+                slotStatus[slot] = "$entity → błąd: $msg"
+                main.post { overlay.setHaContent(slot, "—", "mdi:alert-circle-outline") }
             }
         }
         if (errors == 0) {
@@ -92,22 +105,44 @@ class HaClient(private val overlay: OverlayManager) {
         }
     }
 
-    /** "label wartość jednostka", z zaokrągleniem, gdy "decimals" >= 0. */
-    private fun format(st: JSONObject, c: JSONObject): String {
+    /**
+     * Tekst do wyświetlenia albo null, gdy warunek wyświetlania nie jest spełniony.
+     * mode: value | name_value | name; show_when: always | above | below | equals | not_equals
+     */
+    private fun format(st: JSONObject, c: JSONObject): String? {
         val raw = st.optString("state", "")
         val attrs = st.optJSONObject("attributes")
+        val num = raw.replace(',', '.').toDoubleOrNull()
+        val threshold = c.optDouble("threshold", 0.0)
+        val match = c.optString("match", "").trim()
+
+        val show = when (c.optString("show_when", "always")) {
+            "above" -> num != null && num > threshold
+            "below" -> num != null && num < threshold
+            "equals" -> if (match.isNotEmpty()) raw.equals(match, true) else num != null && num == threshold
+            "not_equals" -> if (match.isNotEmpty()) !raw.equals(match, true) else !(num != null && num == threshold)
+            else -> true
+        }
+        if (!show) return null
+
         val unit = if (c.optBoolean("unit", true)) attrs?.optString("unit_of_measurement", "") ?: "" else ""
         val decimals = c.optInt("decimals", -1)
         val value = when {
             raw == "unavailable" || raw == "unknown" -> "—"
             raw == "on" -> "wł."
             raw == "off" -> "wył."
-            decimals >= 0 && raw.toDoubleOrNull() != null ->
-                String.format(Locale("pl", "PL"), "%.${decimals}f", raw.toDouble())
+            decimals >= 0 && num != null -> String.format(Locale("pl", "PL"), "%.${decimals}f", num)
             else -> raw
         }
-        val label = c.optString("label", "").trim()
-        return listOf(label, value, unit).filter { it.isNotEmpty() }.joinToString(" ")
+        val valueText = listOf(value, unit).filter { it.isNotEmpty() }.joinToString(" ")
+        val name = c.optString("label", "").trim().ifEmpty {
+            attrs?.optString("friendly_name", "")?.trim() ?: ""
+        }
+        return when (c.optString("mode", "value")) {
+            "name" -> name.ifEmpty { valueText }
+            "name_value" -> listOf(name, valueText).filter { it.isNotEmpty() }.joinToString(" ")
+            else -> valueText
+        }
     }
 
     // ---------- dla strony ustawień ----------

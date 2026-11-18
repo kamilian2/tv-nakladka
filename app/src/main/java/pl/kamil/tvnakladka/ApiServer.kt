@@ -112,6 +112,7 @@ class ApiServer(
         .put("cameras", overlay.camerasActive)
         .put("entities", overlay.entitiesJson())
         .put("ha_status", overlay.ha?.status ?: "")
+        .put("ha_slots", JSONObject((overlay.ha?.slotStatus ?: emptyMap<String, String>()) as Map<*, *>))
 
     /** Ustawienia bez tokenu HA (strona jest dostępna w całej sieci lokalnej). */
     private fun masked(): JSONObject {

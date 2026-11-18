@@ -175,8 +175,15 @@ class MainActivity : Activity() {
                         if (ent.isBlank()) "Encja HA: nie wybrano. Wybierzesz ją na stronie http://IP:$API_PORT (zakładka pola) albo HA wyśle treść sam."
                         else "Encja HA: $ent  (zmiana na stronie ustawień)"
                     ))
+                    choiceRow("Co pokazać", key, "mode", listOf(
+                        "value" to "Sama wartość", "name_value" to "Nazwa + wartość", "name" to "Sama nazwa"))
                     numberRow("Miejsca po przecinku (-1 = bez zmian)", key, "decimals", -1, 3, 1, 1)
                     toggleRow("Pokaż jednostkę", key, "unit")
+                    choiceRow("Kiedy pokazywać", key, "show_when", listOf(
+                        "always" to "Zawsze", "above" to "Wartość > próg", "below" to "Wartość < próg",
+                        "equals" to "Stan = próg/tekst", "not_equals" to "Stan ≠ próg/tekst"))
+                    numberRow("Próg", key, "threshold", -1000, 100000, 1, 10)
+                    rows.addView(label("Stan: " + (o.ha?.slotStatus?.get(key) ?: "-")))
                 }
             }
             "camera" -> {

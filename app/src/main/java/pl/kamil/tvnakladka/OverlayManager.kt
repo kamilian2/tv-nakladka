@@ -101,6 +101,10 @@ class OverlayManager(private val ctx: Context) {
                 // pobieranie z Home Assistanta
                 .put("entity", "").put("label", "").put("icon", "")
                 .put("decimals", -1).put("unit", true)
+                // co pokazać: value = sama wartość, name_value = nazwa + wartość, name = sama nazwa
+                .put("mode", "value")
+                // kiedy pokazać: always, above, below, equals, not_equals
+                .put("show_when", "always").put("threshold", 0).put("match", "")
             "notify" -> JSONObject()
                 .put("corner", "top_start").put("size", 22).put("duration", 8)
                 .put("font", "sans-serif").put("background", "#101820").put("opacity", 80)

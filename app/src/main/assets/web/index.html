@@ -152,30 +152,43 @@ function render() {
 
     if (sec !== "clock") {
       const c = S.config[sec];
-      const haCard = card("Pobieranie z Home Assistanta",
-        $(`<div class="row"><label>Encja</label><div class="inline"><input id="ent" type="text" list="entlist" placeholder="np. sensor.siedlce_temperatura" value="${esc(c.entity)}"><datalist id="entlist"></datalist></div><output></output></div>`),
-        $(`<div class="row"><label>Opis przed wartością</label><input id="lab" type="text" placeholder="np. Na zewnątrz" value="${esc(c.label)}"><output></output></div>`),
-        $(`<div class="row"><label>Ikona (puste = z HA)</label><input id="ico" type="text" placeholder="np. mdi:thermometer" value="${esc(c.icon)}"><output></output></div>`),
+      const txt = (id, label, key, ph) => {
+        const el = $(`<div class="row"><label>${label}</label><input id="${id}" type="text" placeholder="${ph}" value="${esc(c[key])}"><output></output></div>`);
+        const inp = el.querySelector("input");
+        inp.oninput = () => save(sec, key, inp.value.trim());
+        return el;
+      };
+      const haCard = card("Encja z Home Assistanta",
+        $(`<div class="row"><label>Encja</label><div class="inline" style="width:100%"><input id="ent" type="text" list="entlist" autocomplete="off" autocapitalize="off" placeholder="np. sensor.siedlce_temperatura" value="${esc(c.entity)}"><datalist id="entlist"></datalist></div><output></output></div>`),
+        select(sec, "mode", "Co pokazać", [
+          { value:"value", name:"Sama wartość" },
+          { value:"name_value", name:"Nazwa + wartość" },
+          { value:"name", name:"Sama nazwa" }]),
+        txt("lab", "Własna nazwa (puste = z HA)", "label", "np. Na zewnątrz"),
+        txt("ico", "Ikona (puste = z HA)", "icon", "np. mdi:thermometer"),
         range(sec, "decimals", "Miejsca po przecinku (-1 = bez zmian)", -1, 3, 1),
         check(sec, "unit", "Pokaż jednostkę"));
-      haCard.querySelector("#ent").onchange = (e) => save(sec, "entity", e.target.value.trim());
-      haCard.querySelector("#lab").onchange = (e) => save(sec, "label", e.target.value);
-      haCard.querySelector("#ico").onchange = (e) => save(sec, "icon", e.target.value.trim());
-      haCard.appendChild(buttons([["Usuń encję z pola", () => { save(sec, "entity", ""); haCard.querySelector("#ent").value = ""; }]]));
-      haCard.appendChild($(`<div class="hint">Wymaga adresu i tokenu w zakładce „Home Assistant”. Zaczniesz pisać – pojawią się podpowiedzi encji. Stan: ${esc(S.ha_status || "-")}</div>`));
+      const ent = haCard.querySelector("#ent");
+      ent.oninput = () => { clearTimeout(timers.ent); timers.ent = setTimeout(() => save(sec, "entity", ent.value.trim()), 500); };
+      ent.onchange = () => save(sec, "entity", ent.value.trim());
+      haCard.appendChild(buttons([["Usuń encję z pola", () => { save(sec, "entity", ""); ent.value = ""; }]]));
+      haCard.appendChild($(`<div class="hint" id="slotstat">Stan: ${esc((S.ha_slots || {})[sec] || S.ha_status || "-")}</div>`));
       m.appendChild(haCard);
-      loadEntities();
 
-      const n = sec.slice(1), cur = (S.entities || {})[sec] || {};
-      const t = card(`Podgląd – wyślij treść do pola ${n}`,
-        $(`<div class="row"><label>Tekst</label><input id="tt" type="text" value="${esc(cur.text || "12 °C")}"><output></output></div>`),
-        $(`<div class="row"><label>Ikona (mdi:…)</label><input id="ti" type="text" value="${esc(cur.icon || "mdi:weather-partly-cloudy")}"><output></output></div>`));
-      t.appendChild(buttons([
-        ["Wyślij", () => api("/entity", { slot:n, text:document.getElementById("tt").value, icon:document.getElementById("ti").value }).then(j => j.ok && toast("Wysłano")), true],
-        ["Wyczyść", () => api("/entity/clear", { slot:n })]
-      ]));
-      t.appendChild($(`<div class="hint">Na stałe treść wysyła Home Assistant – zakładka „Home Assistant”. Lista ikon: pictogrammers.com/library/mdi</div>`));
-      m.appendChild(t);
+      const cond = card("Kiedy pokazywać",
+        select(sec, "show_when", "Pokazuj", [
+          { value:"always", name:"Zawsze" },
+          { value:"above", name:"Gdy wartość większa niż…" },
+          { value:"below", name:"Gdy wartość mniejsza niż…" },
+          { value:"equals", name:"Gdy stan równy…" },
+          { value:"not_equals", name:"Gdy stan różny od…" }]));
+      const th = $(`<div class="row"><label>Próg (liczba)</label><input type="number" step="any" value="${esc(c.threshold)}"><output></output></div>`);
+      th.querySelector("input").oninput = (e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) save(sec, "threshold", v); };
+      cond.appendChild(th);
+      cond.appendChild(txt("match", "Stan tekstowy (dla „równy/różny”)", "match", "np. on, home, open – puste = porównaj z progiem"));
+      cond.appendChild($(`<div class="hint">Przykład: produkcja PV pokazywana tylko powyżej 100 W → „Gdy wartość większa niż…”, próg 100. Gdy warunek nie jest spełniony, pole znika z ekranu.</div>`));
+      m.appendChild(cond);
+      loadEntities();
     }
   }
 
@@ -313,6 +326,16 @@ async function load() {
 function editOn() { fetch("/edit", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ on:true, seconds:90 }) }).catch(()=>{}); }
 setInterval(editOn, 60000);
 window.addEventListener("pagehide", () => { try { navigator.sendBeacon("/edit", JSON.stringify({ on:false })); } catch(e){} });
+
+setInterval(async () => {
+  const el = document.getElementById("slotstat");
+  if (!el || !S) return;
+  try {
+    const j = await (await fetch("/status")).json();
+    S.ha_slots = j.ha_slots; S.ha_status = j.ha_status;
+    el.textContent = "Stan: " + ((j.ha_slots || {})[tab] || j.ha_status || "-");
+  } catch (e) {}
+}, 3000);
 
 editOn();
 load();
