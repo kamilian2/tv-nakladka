@@ -45,6 +45,15 @@ rest_command:
     payload: >
       {{ {"streams": streams, "duration": duration | default(30)} | to_json }}
 
+  # Zapisane kamery (adresy ustawione w aplikacji), np. cams: [1, 3]
+  tv_kamera_zapisana:
+    url: "http://192.168.1.114:5002/camera"
+    method: POST
+    content_type: "application/json; charset=utf-8"
+    timeout: 5
+    payload: >
+      {{ {"cams": cams, "duration": duration | default(30)} | to_json }}
+
   tv_kamery_stop:
     url: "http://192.168.1.114:5002/camera/stop"
     method: POST

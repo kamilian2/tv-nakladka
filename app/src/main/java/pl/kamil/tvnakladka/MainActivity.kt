@@ -37,7 +37,7 @@ class MainActivity : Activity() {
 
     private val tabs = linkedMapOf(
         "clock" to "Zegar", "e1" to "Encja 1", "e2" to "Encja 2", "e3" to "Encja 3",
-        "camera" to "Kamery", "other" to "Inne", "ha" to "HA"
+        "camera" to "Kamery", "other" to "Inne", "ha" to "HA", "keys" to "Pilot"
     )
 
     private val overlay get() = OverlayManager.current
@@ -88,6 +88,7 @@ class MainActivity : Activity() {
         bottom.addView(smallButton("Domyślne (ta zakładka)") { resetTab() })
         bottom.addView(smallButton("Uprawnienie") { openOverlaySettings() })
         bottom.addView(smallButton("Bez usypiania") { askIgnoreBattery() })
+        bottom.addView(smallButton("Ułatwienia dostępu") { openAccessibility() })
         panel.addView(bottom)
 
         setContentView(root)
@@ -205,6 +206,26 @@ class MainActivity : Activity() {
                 choiceRow("Powiadomienia – czcionka", "notify", "font", fonts)
                 choiceRow("Powiadomienia – tło", "notify", "background", OverlayManager.BACKGROUNDS)
                 numberRow("Powiadomienia – krycie tła %", "notify", "opacity", 0, 100, 5, 20)
+            }
+            "keys" -> {
+                rows.addView(label(
+                    if (KeyService.running) "Usługa przycisków: włączona ✔"
+                    else "Usługa przycisków: WYŁĄCZONA – przyciski działają tylko w tym oknie. Włącz ją przyciskiem „Ułatwienia dostępu” na dole albo przez ADB (instrukcja na stronie ustawień)."
+                ))
+                val actions = o.keyActions()
+                for (i in 1..OverlayManager.KEY_SLOTS) {
+                    val (row, value) = rowBase("Przycisk $i")
+                    value.text = o.cfg("keys").optString("k${i}_name", "").ifBlank { "nie przypisano" }
+                    row.addView(smallButton("Naucz") { learn("k$i") })
+                    row.addView(smallButton("Usuń") {
+                        o.updateConfig(JSONObject().put("keys", JSONObject()
+                            .put("k${i}_code", 0).put("k${i}_name", "").put("k${i}_action", "none")))
+                        selectTab("keys")
+                    })
+                    choiceRow("   akcja", "keys", "k${i}_action", actions)
+                }
+                toggleRow("Wstecz zamyka kamery", "general", "back_closes")
+                rows.addView(label("Adresy kamer (RTSP) i ich nazwy ustawisz na stronie ustawień – zakładka „Pilot i kamery”. Ponowne naciśnięcie przycisku zamyka kamerę."))
             }
             "ha" -> {
                 val h = o.cfg("ha")
@@ -352,6 +373,34 @@ class MainActivity : Activity() {
         o.setEntity(JSONObject().put("slot", 2).put("text", "3450 W").put("icon", "mdi:solar-power").put("color", "#FFD54F").put("expiration", 30))
         o.setEntity(JSONObject().put("slot", 3).put("text", "Zmywarka: koniec").put("icon", "mdi:dishwasher").put("expiration", 30))
         o.notify(JSONObject().put("title", "TV Nakładka").put("message", "Powiadomienie testowe").put("icon", "mdi:home-assistant"))
+    }
+
+    /** Czeka na naciśnięcie przycisku pilota (łapie go usługa albo to okno). */
+    private fun learn(slot: String) {
+        val o = overlay ?: return
+        o.startLearning(slot)
+        fun poll() {
+            if (o.learning == null) { selectTab("keys"); return }
+            handler.postDelayed({ poll() }, 400)
+        }
+        handler.postDelayed({ poll() }, 400)
+    }
+
+    /** Gdy usługa przycisków nie działa, nauka przycisku działa w tym oknie. */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val o = overlay
+        if (o != null && (o.learning != null || event.action == android.view.KeyEvent.ACTION_UP)) {
+            if (o.handleKey(event)) return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun openAccessibility() {
+        try {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Użyj ADB – instrukcja na stronie ustawień", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun openOverlaySettings() {

@@ -111,12 +111,22 @@ class OverlayManager(private val ctx: Context) {
             "camera" -> JSONObject()
                 .put("max_seconds", 30).put("width", 400).put("gap", 10)
                 .put("align", "center").put("bottom", 24)
-            "general" -> JSONObject().put("margin", 24)
+            "general" -> JSONObject().put("margin", 24).put("back_closes", true)
             "ha" -> JSONObject().put("url", "").put("token", "").put("interval", 5)
+            // zapisane kamery: c1_name, c1_url ... c6_name, c6_url
+            "cams" -> JSONObject().also { o ->
+                for (i in 1..CAM_SLOTS) { o.put("c${i}_name", "Kamera $i"); o.put("c${i}_url", "") }
+            }
+            // przyciski pilota: k1_code, k1_name, k1_action ... (action: none, cam:c1, cams:all, stop)
+            "keys" -> JSONObject().also { o ->
+                for (i in 1..KEY_SLOTS) { o.put("k${i}_code", 0); o.put("k${i}_name", ""); o.put("k${i}_action", "none") }
+            }
             else -> JSONObject()
         }
 
-        val SECTIONS = listOf("clock", "e1", "e2", "e3", "notify", "camera", "general", "ha")
+        val SECTIONS = listOf("clock", "e1", "e2", "e3", "notify", "camera", "general", "ha", "cams", "keys")
+        const val CAM_SLOTS = 6
+        const val KEY_SLOTS = 6
 
         /** Kolor tła z przezroczystością: kolor bez kanału alfa + krycie 0–100 %. */
         fun bgColor(c: JSONObject, defColor: Int): Int {
@@ -582,7 +592,16 @@ class OverlayManager(private val ctx: Context) {
             }
         }
         if (j.optString("url").isNotBlank()) { list.add(j.optString("url")); labels.add(j.optString("label", "")) }
-        if (list.isEmpty()) throw IllegalArgumentException("Brak adresów kamer (streams)")
+        // zapisane kamery po numerze/id: "cams": [1, "c2"]
+        j.optJSONArray("cams")?.let { ids ->
+            val saved = cfg("cams")
+            for (i in 0 until ids.length()) {
+                val d = ids.opt(i)?.toString()?.lastOrNull { it.isDigit() } ?: continue
+                val url = saved.optString("c${d}_url", "")
+                if (url.isNotBlank()) { list.add(url); labels.add("") }
+            }
+        }
+        if (list.isEmpty()) throw IllegalArgumentException("Brak adresów kamer (streams albo cams)")
 
         val maxSec = c.optLong("max_seconds", 30)
         val wanted = parseSeconds(j.opt("duration"), maxSec)
@@ -687,6 +706,7 @@ class OverlayManager(private val ctx: Context) {
     }
 
     fun stopCameras() {
+        activeKeyAction = null
         handler.removeCallbacks(stopCamerasRunnable)
         val list = players.toList()
         players.clear()
@@ -696,4 +716,115 @@ class OverlayManager(private val ctx: Context) {
     }
 
     val camerasActive get() = cameraRow != null
+
+    // ================= przyciski pilota =================
+
+    /** Slot (k1..k6), dla którego czekamy na naciśnięcie przycisku. */
+    var learning: String? = null
+        private set
+    var lastLearned: String = ""
+        private set
+    private var consumeUpFor = -1
+    private var activeKeyAction: String? = null
+    private val learnTimeout = Runnable {
+        if (learning != null) {
+            learning = null
+            notify(JSONObject().put("title", "Nie naciśnięto przycisku").put("icon", "mdi:remote").put("duration", 3))
+        }
+    }
+
+    fun startLearning(slot: String) {
+        val d = slot.lastOrNull { it.isDigit() } ?: return
+        learning = "k$d"
+        lastLearned = ""
+        handler.removeCallbacks(learnTimeout)
+        handler.postDelayed(learnTimeout, 15_000)
+        notify(JSONObject().put("id", "learn").put("title", "Naciśnij przycisk na pilocie")
+            .put("message", "dla pozycji $d (15 s)").put("icon", "mdi:remote").put("duration", 15))
+    }
+
+    /**
+     * Obsługa przycisku pilota. Zwraca true, gdy przycisk został "zużyty"
+     * (telewizor go wtedy nie dostanie, np. nie przełączy kanału).
+     */
+    fun handleKey(e: android.view.KeyEvent): Boolean {
+        val code = e.keyCode
+        val down = e.action == android.view.KeyEvent.ACTION_DOWN
+        if (!down && code == consumeUpFor) { consumeUpFor = -1; return true }
+        if (!down) return false
+
+        // nauka przycisku
+        learning?.let { slot ->
+            if (code == android.view.KeyEvent.KEYCODE_BACK) {
+                learning = null
+                handler.removeCallbacks(learnTimeout)
+                removeNotification("learn")
+                consumeUpFor = code
+                return true
+            }
+            val name = android.view.KeyEvent.keyCodeToString(code).removePrefix("KEYCODE_")
+            learning = null
+            handler.removeCallbacks(learnTimeout)
+            updateConfig(JSONObject().put("keys", JSONObject()
+                .put("${slot}_code", code).put("${slot}_name", name)))
+            lastLearned = "$slot:$name"
+            removeNotification("learn")
+            notify(JSONObject().put("title", "Zapisano przycisk").put("message", name)
+                .put("icon", "mdi:check-circle").put("duration", 3))
+            consumeUpFor = code
+            return true
+        }
+
+        // Wstecz zamyka kamery
+        if (code == android.view.KeyEvent.KEYCODE_BACK && camerasActive &&
+            cfg("general").optBoolean("back_closes", true)) {
+            stopCameras()
+            consumeUpFor = code
+            return true
+        }
+
+        // przypisane przyciski
+        val keys = cfg("keys")
+        for (i in 1..KEY_SLOTS) {
+            if (keys.optInt("k${i}_code", 0) != code) continue
+            val action = keys.optString("k${i}_action", "none")
+            if (action == "none") continue
+            if (e.repeatCount == 0) runKeyAction(action)
+            consumeUpFor = code
+            return true
+        }
+        return false
+    }
+
+    /** cam:c1 – jedna kamera, cams:all – wszystkie zapisane, stop – zamknij. Ponowne naciśnięcie zamyka. */
+    fun runKeyAction(action: String) {
+        if (action == "stop" || (camerasActive && activeKeyAction == action)) {
+            stopCameras()
+            return
+        }
+        val saved = cfg("cams")
+        val ids = when {
+            action.startsWith("cam:") -> listOf(action.removePrefix("cam:"))
+            action == "cams:all" -> (1..CAM_SLOTS).map { "c$it" }.filter { saved.optString("${it}_url").isNotBlank() }
+            else -> emptyList()
+        }
+        if (ids.isEmpty()) return
+        try {
+            showCameras(JSONObject().put("cams", JSONArray(ids)))
+            activeKeyAction = action
+        } catch (e: Exception) {
+            notify(JSONObject().put("title", "Brak adresu kamery").put("message", "Ustaw go na stronie ustawień")
+                .put("icon", "mdi:cctv-off").put("duration", 5))
+        }
+    }
+
+    /** Lista akcji do wyboru (wartość -> nazwa). */
+    fun keyActions(): List<Pair<String, String>> {
+        val saved = cfg("cams")
+        val list = mutableListOf("none" to "Brak")
+        for (i in 1..CAM_SLOTS) list.add("cam:c$i" to saved.optString("c${i}_name", "Kamera $i"))
+        list.add("cams:all" to "Wszystkie kamery")
+        list.add("stop" to "Zamknij kamery")
+        return list
+    }
 }

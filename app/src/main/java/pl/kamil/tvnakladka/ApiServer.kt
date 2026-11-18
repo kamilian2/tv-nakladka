@@ -87,6 +87,8 @@ class ApiServer(
                     "/notify/clear" -> { overlay.removeNotification(j.optString("id")); ok() }
                     "/camera" -> { overlay.showCameras(j); ok() }
                     "/camera/stop" -> { overlay.stopCameras(); ok() }
+                    "/keys/learn" -> { overlay.startLearning(j.optString("slot", "k1")); ok() }
+                    "/keys/run" -> { overlay.runKeyAction(j.optString("action", "")); ok() }
                     "/edit" -> {
                         overlay.setEditMode(j.optBoolean("on", true), parseSeconds(j.opt("seconds"), 120))
                         ok()
@@ -112,6 +114,9 @@ class ApiServer(
         .put("cameras", overlay.camerasActive)
         .put("entities", overlay.entitiesJson())
         .put("ha_status", overlay.ha?.status ?: "")
+        .put("key_service", KeyService.running)
+        .put("learning", overlay.learning ?: "")
+        .put("last_learned", overlay.lastLearned)
         .put("ha_slots", JSONObject((overlay.ha?.slotStatus ?: emptyMap<String, String>()) as Map<*, *>))
 
     /** Ustawienia bez tokenu HA (strona jest dostępna w całej sieci lokalnej). */
@@ -152,6 +157,8 @@ class ApiServer(
             .put("backgrounds", pairs(OverlayManager.BACKGROUNDS))
             .put("entities", overlay.entitiesJson())
             .put("ha_status", overlay.ha?.status ?: "")
+            .put("key_service", KeyService.running)
+            .put("key_actions", pairs(overlay.keyActions()))
     }
 
     private fun html(): Response {

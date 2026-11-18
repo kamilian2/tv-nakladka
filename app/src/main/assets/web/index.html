@@ -46,7 +46,7 @@
 <div id="toast"></div>
 
 <script>
-const TABS = [["clock","Zegar"],["e1","Encja 1"],["e2","Encja 2"],["e3","Encja 3"],["camera","Kamery"],["other","Inne"],["ha","Home Assistant"]];
+const TABS = [["clock","Zegar"],["e1","Encja 1"],["e2","Encja 2"],["e3","Encja 3"],["camera","Kamery"],["other","Inne"],["keys","Pilot i kamery"],["ha","Home Assistant"]];
 let S = null, tab = "clock", timers = {};
 
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
@@ -231,6 +231,46 @@ function render() {
     m.appendChild(n);
   }
 
+  if (tab === "keys") {
+    const cams = card("Zapisane kamery");
+    for (let i = 1; i <= 6; i++) {
+      const nm = $(`<div class="row"><label>Kamera ${i} – nazwa</label><input type="text" value="${esc(S.config.cams["c"+i+"_name"])}"><output></output></div>`);
+      nm.querySelector("input").oninput = (e) => save("cams", "c"+i+"_name", e.target.value);
+      const ur = $(`<div class="row"><label>Kamera ${i} – adres RTSP</label><input type="text" autocapitalize="off" autocomplete="off" placeholder="rtsp://login:haslo@192.168.1.50:554/stream2" value="${esc(S.config.cams["c"+i+"_url"])}"><button>Pokaż</button></div>`);
+      ur.querySelector("input").oninput = (e) => save("cams", "c"+i+"_url", e.target.value.trim());
+      const b = ur.querySelector("button");
+      b.style.cssText = "background:#21405c;color:#e8f1f8;border:none;border-radius:8px;padding:8px;cursor:pointer";
+      b.onclick = () => setTimeout(() => api("/camera", { cams:[i] }).then(j => j.ok && toast("Wysłano")), 300);
+      cams.appendChild(nm); cams.appendChild(ur);
+    }
+    m.appendChild(cams);
+
+    const keys = card("Przyciski pilota",
+      $(`<div class="hint" style="margin-top:0">${S.key_service
+        ? "Usługa przycisków: <b>włączona ✔</b> – przyciski działają w każdej aplikacji (TV, Netflix, YouTube)."
+        : "Usługa przycisków: <b>wyłączona</b>. Włącz ją z komputera (w folderze z adb):<br><code>adb shell settings put secure enabled_accessibility_services pl.kamil.tvnakladka/pl.kamil.tvnakladka.KeyService</code><br><code>adb shell settings put secure accessibility_enabled 1</code>"}</div>`));
+    for (let i = 1; i <= 6; i++) {
+      const k = "k" + i, name = S.config.keys[k+"_name"];
+      keys.appendChild(select("keys", k+"_action", `Przycisk ${i}: <b>${esc(name || "nie przypisano")}</b>`, S.key_actions));
+      keys.appendChild(buttons([
+        [`Naucz przycisk ${i}`, async () => {
+          const j = await api("/keys/learn", { slot:k });
+          if (!j.ok) return;
+          toast("Naciśnij teraz przycisk na pilocie…");
+          for (let t = 0; t < 32; t++) {
+            await new Promise(r => setTimeout(r, 500));
+            const st = await (await fetch("/status")).json();
+            if (!st.learning) { await load(); if (st.last_learned) toast("Zapisano: " + st.last_learned.split(":")[1]); return; }
+          }
+        }],
+        ["Usuń", () => api("/settings", { keys: { [k+"_code"]:0, [k+"_name"]:"", [k+"_action"]:"none" } }).then(load)]
+      ]));
+    }
+    keys.appendChild(check("general", "back_closes", "Przycisk Wstecz zamyka kamery"));
+    keys.appendChild($(`<div class="hint">Najlepiej użyć kolorowych przycisków pilota (czerwony, zielony, żółty, niebieski) – w zwykłym oglądaniu rzadko są potrzebne. Przypisany przycisk przestaje działać w innych aplikacjach. Ponowne naciśnięcie zamyka kamerę.</div>`));
+    m.appendChild(keys);
+  }
+
   if (tab === "ha") {
     const h = S.config.ha;
     const conn = card("Połączenie z Home Assistantem",
@@ -281,6 +321,13 @@ function render() {
     timeout: 5
     payload: '{{ {"streams": streams, "duration": duration | default(30)} | to_json }}'
 
+  tv_kamera_zapisana:
+    url: "${base}/camera"
+    method: POST
+    content_type: "application/json; charset=utf-8"
+    timeout: 5
+    payload: '{{ {"cams": cams, "duration": duration | default(30)} | to_json }}'
+
   tv_ustawienia:
     url: "${base}/settings"
     method: POST
@@ -293,6 +340,10 @@ data:
   slot: 1
   text: "{{ states('sensor.siedlce_temperatura') }} °C"
   icon: "mdi:weather-partly-cloudy"`)}</pre>`)));
+    m.appendChild(card("Przykład: zapisane kamery 1 i 3 przy dzwonku",
+      $(`<pre>${esc(`action: rest_command.tv_kamera_zapisana
+data:
+  cams: [1, 3]`)}</pre>`)));
     m.appendChild(card("Przykład: zmiana ustawień z HA",
       $(`<pre>${esc(`action: rest_command.tv_ustawienia
 data:
