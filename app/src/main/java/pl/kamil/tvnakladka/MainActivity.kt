@@ -31,13 +31,15 @@ class MainActivity : Activity() {
     private lateinit var panel: LinearLayout
     private lateinit var info: TextView
     private lateinit var rows: LinearLayout
+    private lateinit var sectionTitle: TextView
+    private var previewMode = false
     private val tabButtons = LinkedHashMap<String, Button>()
     private var tab = "clock"
     private var waitTries = 0
 
     private val tabs = linkedMapOf(
         "clock" to "Zegar", "e1" to "Encja 1", "e2" to "Encja 2", "e3" to "Encja 3",
-        "camera" to "Kamery", "other" to "Inne", "ha" to "HA", "keys" to "Pilot"
+        "camera" to "Kamery", "keys" to "Pilot i kamery", "other" to "Powiadomienia i inne", "ha" to "Home Assistant"
     )
 
     private val overlay get() = OverlayManager.current
@@ -47,53 +49,68 @@ class MainActivity : Activity() {
         installCrashLogger(this)
 
         val root = FrameLayout(this)
+        // cały ekran: menu po lewej, ustawienia po prawej – nic nie jest ukryte ani przyciemnione
         panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(32f), dp(24f), dp(32f), dp(24f))
-            setBackgroundColor(Color.parseColor("#F00F2A3F"))
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.parseColor("#F5081420"))
         }
+        // prawa część ekranu zostaje odsłonięta – tam widać zegar i pola (podgląd na żywo)
         val screenW = resources.displayMetrics.widthPixels
-        root.addView(panel, FrameLayout.LayoutParams((screenW * 0.62).toInt(), ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(panel, FrameLayout.LayoutParams((screenW * 0.74).toInt(), ViewGroup.LayoutParams.MATCH_PARENT))
 
-        panel.addView(TextView(this).apply {
-            text = "TV Nakładka – ustawienia"
+        val menu = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20f), dp(24f), dp(20f), dp(20f))
+            setBackgroundColor(Color.parseColor("#0F2A3F"))
+        }
+        panel.addView(ScrollView(this).apply { addView(menu); isFillViewport = true },
+            LinearLayout.LayoutParams(dp(230f), ViewGroup.LayoutParams.MATCH_PARENT))
+
+        menu.addView(TextView(this).apply {
+            text = "TV Nakładka"
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
             typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(6f), 0, 0, dp(16f))
         })
-        info = TextView(this).apply {
-            setTextColor(Color.parseColor("#B0D8F0"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setPadding(0, dp(6f), 0, dp(10f))
-        }
-        panel.addView(info)
-
-        val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         for ((key, name) in tabs) {
-            val b = smallButton(name) { selectTab(key) }
+            val b = menuButton(name) { selectTab(key) }
             tabButtons[key] = b
-            tabRow.addView(b)
+            menu.addView(b)
         }
-        // zakładki w przewijanym pasku – na wąskim panelu nie mieszczą się wszystkie
-        panel.addView(android.widget.HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(tabRow)
-        })
+        menu.addView(View(this), LinearLayout.LayoutParams(1, dp(20f)))
+        menu.addView(menuButton("👁  Podgląd (ukryj panel)") { preview() })
+        menu.addView(menuButton("Test na ekranie") { test() })
+        menu.addView(menuButton("Domyślne – ta sekcja") { resetTab() })
+        menu.addView(menuButton("Ułatwienia dostępu") { openAccessibility() })
+        menu.addView(menuButton("Uprawnienie nakładki") { openOverlaySettings() })
+        menu.addView(menuButton("Bez usypiania") { askIgnoreBattery() })
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(28f), dp(20f), dp(28f), dp(12f))
+        }
+        panel.addView(content, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+
+        sectionTitle = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        content.addView(sectionTitle)
+        info = TextView(this).apply {
+            setTextColor(Color.parseColor("#C8E6FA"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            setPadding(0, dp(4f), 0, dp(12f))
+        }
+        content.addView(info)
 
         rows = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10f), 0, dp(10f))
+            setPadding(0, dp(4f), 0, dp(24f))
         }
-        panel.addView(ScrollView(this).apply { addView(rows) },
+        content.addView(ScrollView(this).apply { addView(rows) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        val bottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bottom.addView(smallButton("Test na ekranie") { test() })
-        bottom.addView(smallButton("Domyślne (ta zakładka)") { resetTab() })
-        bottom.addView(smallButton("Uprawnienie") { openOverlaySettings() })
-        bottom.addView(smallButton("Bez usypiania") { askIgnoreBattery() })
-        bottom.addView(smallButton("Ułatwienia dostępu") { openAccessibility() })
-        panel.addView(bottom)
 
         setContentView(root)
         startOverlayService(this)
@@ -153,7 +170,8 @@ class MainActivity : Activity() {
 
     private fun selectTab(key: String) {
         tab = key
-        for ((k, b) in tabButtons) b.alpha = if (k == key) 1f else 0.55f
+        for ((k, b) in tabButtons) b.isSelected = k == key
+        sectionTitle.text = tabs[key] ?: ""
         rows.removeAllViews()
         if (overlay == null) {
             rows.addView(label("Nakładka nie działa – sprawdź uprawnienie."))
@@ -257,26 +275,40 @@ class MainActivity : Activity() {
 
     // ---------------- wiersze ustawień ----------------
 
+    /** Wiersz: u góry nazwa i aktualna wartość, pod spodem przyciski (zwracany kontener). */
     private fun rowBase(title: String): Pair<LinearLayout, TextView> {
-        val row = LinearLayout(this).apply {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4f), dp(10f), dp(4f), dp(10f))
+        }
+        val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3f), 0, dp(3f))
         }
-        row.addView(TextView(this).apply {
+        header.addView(TextView(this).apply {
             text = title
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val value = TextView(this).apply {
             setTextColor(Color.parseColor("#FFD54F"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
             typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
+            gravity = Gravity.END
+            setPadding(dp(12f), 0, 0, 0)
         }
-        row.addView(value, LinearLayout.LayoutParams(dp(200f), ViewGroup.LayoutParams.WRAP_CONTENT))
-        rows.addView(row)
-        return row to value
+        header.addView(value, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        box.addView(header)
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(8f), 0, 0)
+        }
+        box.addView(buttons)
+        rows.addView(box)
+        rows.addView(View(this).apply { setBackgroundColor(Color.parseColor("#22FFFFFF")) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1f)))
+        return buttons to value
     }
 
     private fun numberRow(title: String, sec: String, key: String, min: Int, max: Int, small: Int, big: Int) {
@@ -315,8 +347,8 @@ class MainActivity : Activity() {
             overlay?.set(sec, key, options[n].first)
             show()
         }
-        row.addView(smallButton("  ◀  ") { change(-1) })
-        row.addView(smallButton("  ▶  ") { change(1) })
+        row.addView(smallButton("◀") { change(-1) })
+        row.addView(smallButton("▶") { change(1) })
         show()
     }
 
@@ -333,39 +365,81 @@ class MainActivity : Activity() {
 
     private fun label(t: String) = TextView(this).apply {
         text = t
-        setTextColor(Color.parseColor("#B0D8F0"))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-        setPadding(0, dp(10f), 0, 0)
+        setTextColor(Color.parseColor("#C8E6FA"))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+        setLineSpacing(0f, 1.2f)
+        setPadding(dp(4f), dp(12f), 0, dp(8f))
     }
+
+    /** Kolor tekstu przycisku: ciemny na podświetleniu, żółty dla wybranej sekcji. */
+    private fun buttonTextColors() = android.content.res.ColorStateList(
+        arrayOf(
+            intArrayOf(android.R.attr.state_focused),
+            intArrayOf(android.R.attr.state_selected),
+            intArrayOf()
+        ),
+        intArrayOf(Color.parseColor("#04212E"), Color.parseColor("#FFD54F"), Color.WHITE)
+    )
 
     private fun smallButton(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
         isAllCaps = false
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+        typeface = Typeface.DEFAULT_BOLD
         minWidth = 0
-        minimumWidth = 0
+        minimumWidth = dp(70f)
         minHeight = 0
         minimumHeight = 0
-        setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
-        setTextColor(Color.WHITE)
+        gravity = Gravity.CENTER
+        setPadding(dp(16f), dp(10f), dp(16f), dp(10f))
+        setTextColor(buttonTextColors())
         background = focusBackground()
         setOnClickListener { onClick() }
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { marginEnd = dp(6f); topMargin = dp(3f); bottomMargin = dp(3f) }
+        ).apply { marginEnd = dp(10f) }
     }
 
-    /** Tło przycisku: wyraźnie podświetlone, gdy wybrane pilotem. */
+    /** Przycisk w menu po lewej – na całą szerokość. */
+    private fun menuButton(label: String, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        isAllCaps = false
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+        gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        minHeight = 0
+        minimumHeight = 0
+        setPadding(dp(16f), dp(12f), dp(12f), dp(12f))
+        setTextColor(buttonTextColors())
+        background = focusBackground()
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(6f) }
+    }
+
+    /** Tło przycisku: jaskrawe, gdy wybrane pilotem; wyróżnione dla aktywnej sekcji. */
     private fun focusBackground() = android.graphics.drawable.StateListDrawable().apply {
         addState(intArrayOf(android.R.attr.state_focused), GradientDrawable().apply {
-            cornerRadius = dp(8f).toFloat(); setColor(Color.parseColor("#18BCF2"))
+            cornerRadius = dp(10f).toFloat(); setColor(Color.parseColor("#4DD8FF"))
+            setStroke(dp(3f), Color.WHITE)
         })
         addState(intArrayOf(android.R.attr.state_pressed), GradientDrawable().apply {
-            cornerRadius = dp(8f).toFloat(); setColor(Color.parseColor("#1590C0"))
+            cornerRadius = dp(10f).toFloat(); setColor(Color.parseColor("#1590C0"))
+        })
+        addState(intArrayOf(android.R.attr.state_selected), GradientDrawable().apply {
+            cornerRadius = dp(10f).toFloat(); setColor(Color.parseColor("#1E4E70"))
+            setStroke(dp(2f), Color.parseColor("#FFD54F"))
         })
         addState(intArrayOf(), GradientDrawable().apply {
-            cornerRadius = dp(8f).toFloat(); setColor(Color.parseColor("#2A4A63"))
+            cornerRadius = dp(10f).toFloat(); setColor(Color.parseColor("#24435C"))
         })
+    }
+
+    /** Chowa panel, żeby obejrzeć nakładkę na pełnym ekranie. Dowolny przycisk wraca. */
+    private fun preview() {
+        previewMode = true
+        panel.visibility = View.INVISIBLE
+        Toast.makeText(this, "Podgląd – naciśnij dowolny przycisk, aby wrócić", Toast.LENGTH_LONG).show()
     }
 
     // ---------------- akcje ----------------
@@ -392,6 +466,13 @@ class MainActivity : Activity() {
 
     /** Gdy usługa przycisków nie działa, nauka przycisku działa w tym oknie. */
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (previewMode) {
+            if (event.action == android.view.KeyEvent.ACTION_UP) {
+                previewMode = false
+                panel.visibility = View.VISIBLE
+            }
+            return true
+        }
         val o = overlay
         if (o != null && (o.learning != null || event.action == android.view.KeyEvent.ACTION_UP)) {
             if (o.handleKey(event)) return true
