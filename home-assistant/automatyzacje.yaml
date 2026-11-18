@@ -1,0 +1,71 @@
+# Każdą automatyzację wklejasz osobno:
+# Ustawienia → Automatyzacje → Utwórz → ⋮ → Edytuj w YAML
+
+# --- 1. Produkcja PV jako kafelek pod zegarem ---
+alias: "TV: kafelek PV"
+mode: queued
+triggers:
+  - trigger: state
+    entity_id: sensor.produkcja_pv1_pv2
+  - trigger: time_pattern
+    minutes: "/15"
+  - trigger: homeassistant
+    event: start
+actions:
+  - variables:
+      pv: "{{ states('sensor.produkcja_pv1_pv2') | int(0) }}"
+  - if:
+      - condition: template
+        value_template: "{{ pv > 50 }}"
+    then:
+      - action: rest_command.tv_kafelek
+        continue_on_error: true
+        data:
+          id: "pv"
+          text: "{{ pv }} W"
+          icon: "mdi:solar-power"
+          color: "#FFD54F"
+          expiration: "1h"
+    else:
+      - action: rest_command.tv_kafelek_usun
+        continue_on_error: true
+        data:
+          id: "pv"
+
+---
+# --- 2. Trzy kamery na dole ekranu przy ruchu (maks. 30 s) ---
+alias: "TV: 3 kamery przy ruchu"
+mode: single
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.TWOJ_CZUJNIK_RUCHU
+    to: "on"
+actions:
+  - action: rest_command.tv_kamery
+    continue_on_error: true
+    data:
+      duration: 30
+      width: 420
+      position: "bottom_center"
+      streams:
+        - "rtsp://LOGIN:HASLO@IP_KAMERY1:554/SCIEZKA"
+        - "rtsp://LOGIN:HASLO@IP_KAMERY2:554/SCIEZKA"
+        - "rtsp://LOGIN:HASLO@IP_KAMERY3:554/SCIEZKA"
+  - delay: "00:01:00"
+
+---
+# --- 3. Zmywarka skończyła ---
+alias: "TV: zmywarka skończyła"
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.zmywarka_status
+    from: "on"
+    to: "off"
+actions:
+  - action: rest_command.tv_powiadomienie
+    continue_on_error: true
+    data:
+      title: "Zmywarka"
+      message: "Cykl zakończony"
+      icon: "mdi:dishwasher"
+      duration: 15
