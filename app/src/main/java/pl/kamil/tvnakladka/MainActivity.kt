@@ -39,7 +39,7 @@ class MainActivity : Activity() {
 
     private val tabs = linkedMapOf(
         "clock" to "Zegar", "e1" to "Encja 1", "e2" to "Encja 2", "e3" to "Encja 3", "e4" to "Encja 4", "e5" to "Encja 5",
-        "camera" to "Kamery", "keys" to "Pilot i kamery", "other" to "Powiadomienia i inne", "ha" to "Home Assistant"
+        "group" to "Przesuń wszystko", "camera" to "Kamery", "keys" to "Pilot i kamery", "other" to "Powiadomienia i inne", "ha" to "Home Assistant"
     )
 
     private val overlay get() = OverlayManager.current
@@ -221,6 +221,23 @@ class MainActivity : Activity() {
                     rows.addView(label("Stan: " + (o.ha?.slotStatus?.get(key) ?: "-")))
                 }
             }
+            "group" -> {
+                rows.addView(label("Przesuwa zegar i encje razem – ich układ względem siebie zostaje taki sam. Elementy przy krawędzi ekranu zatrzymują się na niej."))
+                numberRow("W prawo / w lewo (%)", "general", "group_dx", -100, 100, 1, 5)
+                numberRow("W dół / w górę (%)", "general", "group_dy", -100, 100, 1, 5)
+                for (n in OverlayManager.ELEMENTS) {
+                    toggleRow("Przesuwaj: " + (OverlayManager.ELEMENT_NAMES[n] ?: n), n, "in_group")
+                }
+                val (r1, v1) = rowBase("Zapisz położenie na stałe i wyzeruj przesunięcie")
+                v1.text = ""
+                r1.addView(smallButton("Zapisz") { o.applyGroupOffset(); selectTab("group") })
+                val (r2, v2) = rowBase("Cofnij przesunięcie")
+                v2.text = ""
+                r2.addView(smallButton("Wyzeruj") {
+                    o.updateConfig(JSONObject().put("general", JSONObject().put("group_dx", 0).put("group_dy", 0)))
+                    selectTab("group")
+                })
+            }
             "camera" -> {
                 numberRow("Szerokość okienka", "camera", "width", 160, 900, 10, 50)
                 numberRow("Odstęp między okienkami", "camera", "gap", 0, 80, 2, 10)
@@ -277,6 +294,7 @@ class MainActivity : Activity() {
         val o = overlay ?: return
         val sections = when (tab) {
             "other" -> listOf("general", "notify")
+            "group" -> listOf("group_none")
             "ha" -> listOf("ha_none") // adresu i tokenu nie kasujemy przyciskiem
             else -> listOf(tab)
         }

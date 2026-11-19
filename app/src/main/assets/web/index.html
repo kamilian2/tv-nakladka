@@ -46,7 +46,7 @@
 <div id="toast"></div>
 
 <script>
-const TABS = [["clock","Zegar"],["e1","Encja 1"],["e2","Encja 2"],["e3","Encja 3"],["e4","Encja 4"],["e5","Encja 5"],["camera","Kamery"],["other","Inne"],["keys","Pilot i kamery"],["ha","Home Assistant"]];
+const TABS = [["clock","Zegar"],["e1","Encja 1"],["e2","Encja 2"],["e3","Encja 3"],["e4","Encja 4"],["e5","Encja 5"],["group","Przesuń wszystko"],["camera","Kamery"],["other","Inne"],["keys","Pilot i kamery"],["ha","Home Assistant"]];
 let S = null, tab = "clock", timers = {};
 
 const $ = (h) => { const t = document.createElement("template"); t.innerHTML = h.trim(); return t.content.firstChild; };
@@ -211,6 +211,21 @@ function render() {
       m.appendChild(cond);
       loadEntities();
     }
+  }
+
+  if (tab === "group") {
+    const names = { clock:"Zegar", e1:"Encja 1", e2:"Encja 2", e3:"Encja 3", e4:"Encja 4", e5:"Encja 5" };
+    const g = card("Przesuń wszystko razem",
+      $(`<div class="hint" style="margin-top:0">Przesuwa zaznaczone elementy razem – ich układ względem siebie zostaje taki sam. Element przy krawędzi ekranu zatrzymuje się na niej.</div>`),
+      range("general", "group_dx", "W lewo (−) / w prawo (+) %", -100, 100, 0.5),
+      range("general", "group_dy", "W górę (−) / w dół (+) %", -100, 100, 0.5));
+    for (const k of Object.keys(names)) g.appendChild(check(k, "in_group", "Przesuwaj: " + names[k]));
+    g.appendChild(buttons([
+      ["Zapisz położenie na stałe", async () => { const j = await api("/group/apply", {}); if (j.ok) { toast("Zapisano"); await load(); } }, true],
+      ["Wyzeruj przesunięcie", async () => { await api("/settings", { general: { group_dx:0, group_dy:0 } }); await load(); }]
+    ]));
+    g.appendChild($(`<div class="hint">„Zapisz położenie na stałe” wpisuje nowe miejsca do ustawień każdego elementu i zeruje suwaki.</div>`));
+    m.appendChild(g);
   }
 
   if (tab === "camera") {

@@ -92,6 +92,7 @@ class ApiServer(
                         overlay.toggleDemand("e$d", forceShow = j.optBoolean("show", true), seconds = parseSeconds(j.opt("seconds"), -1))
                         ok()
                     }
+                    "/group/apply" -> { overlay.applyGroupOffset(); ok().put("config", masked()) }
                     "/keys/learn" -> { overlay.startLearning(j.optString("slot", "k1")); ok() }
                     "/keys/run" -> { overlay.runKeyAction(j.optString("action", "")); ok() }
                     "/edit" -> {

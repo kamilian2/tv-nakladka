@@ -95,12 +95,14 @@ class OverlayManager(private val ctx: Context) {
                 .put("size", 34).put("font", "sans-serif-medium").put("bold", false)
                 .put("color", "#FFFFFF").put("background", "#000000").put("opacity", 60)
                 .put("text_opacity", 100).put("style", "solid").put("shadow", false)
+                .put("in_group", true)
                 .put("format", "HH:mm:ss").put("icon", "")
             "e1", "e2", "e3", "e4", "e5" -> JSONObject()
                 .put("visible", true).put("x", 100)
                 .put("y", 1 + 8 * (name.drop(1).toInt()))
                 // na żądanie: pole pokazuje się dopiero po naciśnięciu przycisku pilota
                 .put("on_demand", false).put("demand_seconds", 10)
+                .put("in_group", true)
                 .put("text_opacity", 100).put("style", "solid").put("shadow", false)
                 // kolejne encje w tym samym polu – zmieniają się z animacją
                 .put("entity2", "").put("label2", "").put("icon2", "")
@@ -123,6 +125,8 @@ class OverlayManager(private val ctx: Context) {
                 .put("max_seconds", 30).put("width", 400).put("gap", 10)
                 .put("align", "center").put("bottom", 24)
             "general" -> JSONObject().put("margin", 24).put("back_closes", true)
+                // przesunięcie całej grupy (zegar + encje) w % szerokości/wysokości ekranu
+                .put("group_dx", 0).put("group_dy", 0)
             "ha" -> JSONObject().put("url", "").put("token", "").put("interval", 5)
             // zapisane kamery: c1_name, c1_url ... c6_name, c6_url
             "cams" -> JSONObject().also { o ->
@@ -244,6 +248,37 @@ class OverlayManager(private val ctx: Context) {
 
     /** Klient Home Assistanta (ustawiany przez usługę). */
     var ha: HaClient? = null
+
+    /** Wpisuje przesunięcie grupy na stałe w położenie elementów i zeruje przesunięcie. */
+    fun applyGroupOffset() {
+        val g = cfg("general")
+        val dx = g.optDouble("group_dx", 0.0)
+        val dy = g.optDouble("group_dy", 0.0)
+        val r = root
+        val patch = JSONObject().put("general", JSONObject().put("group_dx", 0).put("group_dy", 0))
+        val m = ctx.dp(g.optDouble("margin", 24.0).toFloat())
+        for (name in ELEMENTS) {
+            val c = cfg(name)
+            if (!c.optBoolean("in_group", true)) continue
+            val el = elements[name]
+            // przelicz tak, żeby element został dokładnie tam, gdzie jest teraz
+            val nx: Double
+            val ny: Double
+            if (r != null && el != null && r.width > 0) {
+                val freeW = (r.width - 2 * m - el.pill.width).coerceAtLeast(1)
+                val freeH = (r.height - 2 * m - el.pill.height).coerceAtLeast(1)
+                nx = ((el.pill.translationX - m) / freeW * 100.0)
+                ny = ((el.pill.translationY - m) / freeH * 100.0)
+            } else {
+                nx = c.optDouble("x", 100.0) + dx
+                ny = c.optDouble("y", 0.0) + dy
+            }
+            patch.put(name, JSONObject()
+                .put("x", Math.round(nx.coerceIn(0.0, 100.0) * 10) / 10.0)
+                .put("y", Math.round(ny.coerceIn(0.0, 100.0) * 10) / 10.0))
+        }
+        updateConfig(patch)
+    }
 
     fun set(section: String, key: String, value: Any) {
         updateConfig(JSONObject().put(section, JSONObject().put(key, value)))
@@ -578,8 +613,18 @@ class OverlayManager(private val ctx: Context) {
         val y = c.optDouble("y", 0.0).coerceIn(0.0, 100.0) / 100.0
         val freeW = (r.width - 2 * m - el.pill.width).coerceAtLeast(0)
         val freeH = (r.height - 2 * m - el.pill.height).coerceAtLeast(0)
-        el.pill.translationX = (m + freeW * x).toFloat()
-        el.pill.translationY = (m + freeH * y).toFloat()
+        var tx = m + freeW * x
+        var ty = m + freeH * y
+        // wspólne przesunięcie grupy – układ elementów względem siebie się nie zmienia
+        if (c.optBoolean("in_group", true)) {
+            val g = cfg("general")
+            tx += g.optDouble("group_dx", 0.0) / 100.0 * (r.width - 2 * m)
+            ty += g.optDouble("group_dy", 0.0) / 100.0 * (r.height - 2 * m)
+            tx = tx.coerceIn(m.toDouble(), (m + freeW).toDouble())
+            ty = ty.coerceIn(m.toDouble(), (m + freeH).toDouble())
+        }
+        el.pill.translationX = tx.toFloat()
+        el.pill.translationY = ty.toFloat()
     }
 
     private fun setIcon(tv: TextView, icon: String?, sizeSp: Float, color: Int) {
