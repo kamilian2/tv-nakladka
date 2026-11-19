@@ -67,8 +67,10 @@ class HaClient(private val overlay: OverlayManager) {
         val ha = snap.optJSONObject("ha") ?: return
         val url = ha.optString("url").trim().trimEnd('/')
         val token = ha.optString("token").trim()
-        val slots = OverlayManager.SLOTS.filter {
-            snap.optJSONObject(it)?.optString("entity", "")?.isNotBlank() == true
+        val suffixes = listOf("", "2", "3", "4")
+        val slots = OverlayManager.SLOTS.filter { slot ->
+            val c = snap.optJSONObject(slot) ?: return@filter false
+            suffixes.any { c.optString("entity$it", "").isNotBlank() }
         }
         for (s in OverlayManager.SLOTS) if (s !in slots) slotStatus[s] = "brak encji"
         if (slots.isEmpty()) { status = "Brak przypisanych encji"; return }
@@ -77,28 +79,30 @@ class HaClient(private val overlay: OverlayManager) {
         var errors = 0
         for (slot in slots) {
             val c = snap.getJSONObject(slot)
-            val entity = c.optString("entity").trim()
-            try {
-                val st = JSONObject(get("$url/api/states/$entity", token))
-                val text = format(st, c)
-                val icon = c.optString("icon", "").ifBlank {
-                    st.optJSONObject("attributes")?.optString("icon", "") ?: ""
+            val items = mutableListOf<OverlayManager.Item>()
+            val info = mutableListOf<String>()
+            for (suf in suffixes) {
+                val entity = c.optString("entity$suf", "").trim()
+                if (entity.isEmpty()) continue
+                try {
+                    val st = JSONObject(get("$url/api/states/$entity", token))
+                    val (text, ok) = format(st, c, suf)
+                    val icon = c.optString("icon$suf", "").ifBlank {
+                        st.optJSONObject("attributes")?.optString("icon", "") ?: ""
+                    }
+                    items.add(OverlayManager.Item(text, icon, "", ok))
+                    info.add("$entity = ${st.optString("state")} → „$text”" + (if (ok) "" else " (ukryte – warunek)"))
+                } catch (e: Exception) {
+                    errors++
+                    Log.w("TvNakladka", "HA $entity: $e")
+                    val msg = e.message ?: e.javaClass.simpleName
+                    status = "Błąd ($entity): $msg"
+                    info.add("$entity → błąd: $msg")
+                    items.add(OverlayManager.Item("—", "mdi:alert-circle-outline", "", true))
                 }
-                if (text == null) {
-                    slotStatus[slot] = "$entity = ${st.optString("state")} → ukryte (warunek)"
-                    main.post { overlay.setHaContent(slot, "", "") }
-                } else {
-                    slotStatus[slot] = "$entity = ${st.optString("state")} → „$text”"
-                    main.post { overlay.setHaContent(slot, text, icon) }
-                }
-            } catch (e: Exception) {
-                errors++
-                Log.w("TvNakladka", "HA $entity: $e")
-                val msg = e.message ?: e.javaClass.simpleName
-                status = "Błąd ($entity): $msg"
-                slotStatus[slot] = "$entity → błąd: $msg"
-                main.post { overlay.setHaContent(slot, "—", "mdi:alert-circle-outline") }
             }
+            slotStatus[slot] = info.joinToString("  |  ")
+            main.post { overlay.setHaItems(slot, items) }
         }
         if (errors == 0) {
             status = "OK – ostatnie pobranie " + SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
@@ -109,7 +113,7 @@ class HaClient(private val overlay: OverlayManager) {
      * Tekst do wyświetlenia albo null, gdy warunek wyświetlania nie jest spełniony.
      * mode: value | name_value | name; show_when: always | above | below | equals | not_equals
      */
-    private fun format(st: JSONObject, c: JSONObject): String? {
+    private fun format(st: JSONObject, c: JSONObject, suf: String): Pair<String, Boolean> {
         val raw = st.optString("state", "")
         val attrs = st.optJSONObject("attributes")
         val num = raw.replace(',', '.').toDoubleOrNull()
@@ -123,7 +127,6 @@ class HaClient(private val overlay: OverlayManager) {
             "not_equals" -> if (match.isNotEmpty()) !raw.equals(match, true) else !(num != null && num == threshold)
             else -> true
         }
-        if (!show) return null
 
         val unit = if (c.optBoolean("unit", true)) attrs?.optString("unit_of_measurement", "") ?: "" else ""
         val decimals = c.optInt("decimals", -1)
@@ -135,14 +138,15 @@ class HaClient(private val overlay: OverlayManager) {
             else -> raw
         }
         val valueText = listOf(value, unit).filter { it.isNotEmpty() }.joinToString(" ")
-        val name = c.optString("label", "").trim().ifEmpty {
+        val name = c.optString("label$suf", "").trim().ifEmpty {
             attrs?.optString("friendly_name", "")?.trim() ?: ""
         }
-        return when (c.optString("mode", "value")) {
+        val text = when (c.optString("mode", "value")) {
             "name" -> name.ifEmpty { valueText }
             "name_value" -> listOf(name, valueText).filter { it.isNotEmpty() }.joinToString(" ")
             else -> valueText
         }
+        return text to show
     }
 
     // ---------- dla strony ustawień ----------

@@ -164,6 +164,8 @@ class ApiServer(
             .put("ha_status", overlay.ha?.status ?: "")
             .put("key_service", KeyService.running)
             .put("key_actions", pairs(overlay.keyActions()))
+            .put("styles", pairs(OverlayManager.STYLES))
+            .put("transitions", pairs(OverlayManager.TRANSITIONS))
     }
 
     private fun html(): Response {

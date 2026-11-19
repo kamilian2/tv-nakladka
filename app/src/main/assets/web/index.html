@@ -139,7 +139,10 @@ function render() {
       check(sec, "bold", "Pogrubienie"),
       color(sec, "color", "Kolor tekstu", colors),
       color(sec, "background", "Kolor tła", bgs),
-      range(sec, "opacity", "Krycie tła % (0 = bez tła)", 0, 100, 1));
+      range(sec, "opacity", "Krycie tła % (0 = bez tła)", 0, 100, 1),
+      select(sec, "style", "Styl tła", S.styles),
+      range(sec, "text_opacity", "Krycie tekstu %", 5, 100, 1),
+      check(sec, "shadow", "Cień pod tekstem"));
     if (sec === "clock") {
       look.appendChild(select(sec, "format", "Format godziny", S.formats.map(f => ({ value:f, name:f }))));
       const fr = $(`<div class="row"><label>Własny format</label><input type="text" placeholder="np. HH:mm:ss  EEEE" value="${esc(S.config.clock.format)}"><output></output></div>`);
@@ -174,6 +177,21 @@ function render() {
       haCard.appendChild(buttons([["Usuń encję z pola", () => { save(sec, "entity", ""); ent.value = ""; }]]));
       haCard.appendChild($(`<div class="hint" id="slotstat">Stan: ${esc((S.ha_slots || {})[sec] || S.ha_status || "-")}</div>`));
       m.appendChild(haCard);
+
+      const more = card("Kolejne encje w tym polu (zmieniają się z animacją)");
+      for (const n of [2, 3, 4]) {
+        const r = $(`<div class="row"><label>Encja ${n}</label><input type="text" list="entlist" autocomplete="off" autocapitalize="off" placeholder="np. sensor.produkcja_pv1_pv2" value="${esc(c["entity"+n])}"><output></output></div>`);
+        const inp = r.querySelector("input");
+        inp.oninput = () => { clearTimeout(timers["e"+n]); timers["e"+n] = setTimeout(() => save(sec, "entity"+n, inp.value.trim()), 500); };
+        more.appendChild(r);
+        more.appendChild(txt("lab"+n, `Encja ${n} – własna nazwa`, "label"+n, "puste = z HA"));
+        more.appendChild(txt("ico"+n, `Encja ${n} – ikona`, "icon"+n, "puste = z HA"));
+      }
+      more.appendChild(range(sec, "cycle_seconds", "Zmiana co (s)", 1, 60, 1));
+      more.appendChild(select(sec, "transition", "Animacja", S.transitions));
+      more.appendChild(range(sec, "transition_ms", "Czas animacji (ms)", 100, 3000, 50));
+      more.appendChild($(`<div class="hint">Pole pokazuje po kolei encję główną i encje 2–4. Wygląd, tryb (wartość/nazwa) i warunek są wspólne.</div>`));
+      m.appendChild(more);
 
       const cond = card("Kiedy pokazywać",
         select(sec, "show_when", "Pokazuj", [

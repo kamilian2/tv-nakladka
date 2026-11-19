@@ -94,12 +94,19 @@ class OverlayManager(private val ctx: Context) {
                 .put("visible", true).put("x", 100).put("y", 0)
                 .put("size", 34).put("font", "sans-serif-medium").put("bold", false)
                 .put("color", "#FFFFFF").put("background", "#000000").put("opacity", 60)
+                .put("text_opacity", 100).put("style", "solid").put("shadow", false)
                 .put("format", "HH:mm:ss").put("icon", "")
             "e1", "e2", "e3", "e4", "e5" -> JSONObject()
                 .put("visible", true).put("x", 100)
                 .put("y", 1 + 8 * (name.drop(1).toInt()))
                 // na żądanie: pole pokazuje się dopiero po naciśnięciu przycisku pilota
                 .put("on_demand", false).put("demand_seconds", 10)
+                .put("text_opacity", 100).put("style", "solid").put("shadow", false)
+                // kolejne encje w tym samym polu – zmieniają się z animacją
+                .put("entity2", "").put("label2", "").put("icon2", "")
+                .put("entity3", "").put("label3", "").put("icon3", "")
+                .put("entity4", "").put("label4", "").put("icon4", "")
+                .put("cycle_seconds", 5).put("transition", "fade").put("transition_ms", 600)
                 .put("size", 24).put("font", "sans-serif").put("bold", true)
                 .put("color", "#FFFFFF").put("background", "#000000").put("opacity", 60)
                 // pobieranie z Home Assistanta
@@ -128,6 +135,15 @@ class OverlayManager(private val ctx: Context) {
             else -> JSONObject()
         }
 
+        val STYLES = listOf(
+            "solid" to "Jednolite", "glass" to "Szkło jasne (iOS)", "glass_dark" to "Szkło ciemne (iOS)", "outline" to "Ramka"
+        )
+        val TRANSITIONS = listOf(
+            "fade" to "Zanikanie", "flip_x" to "Obrót 3D w pionie", "flip_y" to "Obrót 3D w poziomie",
+            "zoom" to "Powiększenie", "slide_up" to "Przesunięcie w górę", "slide_left" to "Przesunięcie w lewo",
+            "none" to "Bez animacji"
+        )
+
         val SECTIONS = listOf("clock", "e1", "e2", "e3", "e4", "e5", "notify", "camera", "general", "ha", "cams", "keys")
         const val CAM_SLOTS = 6
         const val KEY_SLOTS = 6
@@ -149,11 +165,19 @@ class OverlayManager(private val ctx: Context) {
     private var root: FrameLayout? = null
     private val corners = HashMap<String, LinearLayout>()
 
-    private class Element(val pill: LinearLayout, val icon: TextView, val text: TextView)
+    private class Element(val pill: LinearLayout, val inner: LinearLayout, val icon: TextView, val text: TextView)
     private val elements = HashMap<String, Element>()
 
     /** Treść pól na encje (z HA): tekst, ikona, opcjonalny kolor. */
-    private class Content(var text: String = "", var icon: String = "", var color: String = "")
+    /** Jedna pozycja do wyświetlenia w polu (pole może mieć kilka i zmieniać je z animacją). */
+    class Item(val text: String, val icon: String = "", val color: String = "", val ok: Boolean = true)
+
+    private class Content {
+        var items: List<Item> = emptyList()
+        var index = 0
+        var lastSwitch = 0L
+        var animating = false
+    }
     private val contents = HashMap<String, Content>()
     private val contentExpiry = HashMap<String, Runnable>()
 
@@ -292,18 +316,26 @@ class OverlayManager(private val ctx: Context) {
                 includeFontPadding = false
                 fontFeatureSettings = "tnum" // cyfry o stałej szerokości
             }
+            val inner = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(icon)
+                addView(text)
+            }
             val pill = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 background = GradientDrawable()
-                addView(icon)
-                addView(text)
+                clipChildren = true
+                clipToPadding = true
+                cameraDistance = 12000f * ctx.resources.displayMetrics.density
+                addView(inner)
             }
             r.addView(pill, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.LEFT
             ))
             pill.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> position(name) }
-            elements[name] = Element(pill, icon, text)
+            elements[name] = Element(pill, inner, icon, text)
         }
         r.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> for (n in ELEMENTS) position(n) }
 
@@ -318,6 +350,7 @@ class OverlayManager(private val ctx: Context) {
         current = this
         refreshAll()
         handler.post(clockTick)
+        handler.post(cycleTick)
         return true
     }
 
@@ -373,27 +406,43 @@ class OverlayManager(private val ctx: Context) {
         applyCameraLayout()
     }
 
+    /** Pozycje pola, które można teraz pokazać. */
+    private fun pool(name: String): List<Item> {
+        val content = contents[name] ?: return emptyList()
+        val forced = name in demandShown || editMode
+        return content.items.filter { it.text.isNotEmpty() && (it.ok || forced) }
+    }
+
     private fun styleElement(name: String) {
         val el = elements[name] ?: return
         val c = cfg(name)
         val size = c.optDouble("size", 24.0).toFloat()
         val content = contents[name]
-        val color = parseColor(
-            content?.color?.takeIf { it.isNotBlank() } ?: c.optString("color"), Color.WHITE
-        )
+        val pool = pool(name)
+        val item = if (pool.isNotEmpty()) pool[(content?.index ?: 0) % pool.size] else null
+
+        val baseColor = parseColor(item?.color?.takeIf { it.isNotBlank() } ?: c.optString("color"), Color.WHITE)
+        val textAlpha = (c.optDouble("text_opacity", 100.0).coerceIn(5.0, 100.0) * 2.55).toInt()
+        val color = Color.argb(textAlpha, Color.red(baseColor), Color.green(baseColor), Color.blue(baseColor))
         val tf = typeface(c.optString("font", "sans-serif"), c.optBoolean("bold", false))
+        val style = c.optString("style", "solid")
 
         el.text.typeface = tf
         el.text.setTextSize(TypedValue.COMPLEX_UNIT_SP, size)
         el.text.setTextColor(color)
+        val shadow = c.optBoolean("shadow", false) || style.startsWith("glass")
+        if (shadow) {
+            el.text.setShadowLayer(ctx.dp(3f).toFloat(), 0f, ctx.dp(1f).toFloat(), Color.argb(170, 0, 0, 0))
+            el.icon.setShadowLayer(ctx.dp(3f).toFloat(), 0f, ctx.dp(1f).toFloat(), Color.argb(170, 0, 0, 0))
+        } else {
+            el.text.setShadowLayer(0f, 0f, 0f, 0)
+            el.icon.setShadowLayer(0f, 0f, 0f, 0)
+        }
 
-        val iconName = if (name == "clock") c.optString("icon", "") else (content?.icon ?: "")
+        val iconName = if (name == "clock") c.optString("icon", "") else (item?.icon ?: "")
         setIcon(el.icon, iconName, size, color)
 
-        (el.pill.background as GradientDrawable).apply {
-            setColor(bgColor(c, Color.BLACK))
-            cornerRadius = ctx.dp(size * 0.45f).toFloat()
-        }
+        el.pill.background = background(c, size)
         val padH = ctx.dp(size * 0.5f)
         val padV = ctx.dp(size * 0.22f)
         el.pill.setPadding(padH, padV, padH, padV)
@@ -407,13 +456,116 @@ class OverlayManager(private val ctx: Context) {
             el.text.text = clockFormat.format(Date())
             el.pill.visibility = if (c.optBoolean("visible", true)) View.VISIBLE else View.GONE
         } else {
-            val txt = content?.text ?: ""
-            val demandOk = !c.optBoolean("on_demand", false) || name in demandShown || editMode
-            val show = c.optBoolean("visible", true) && (txt.isNotEmpty() || editMode) && demandOk
-            el.text.text = if (txt.isEmpty() && editMode) ELEMENT_NAMES[name] else txt
+            val forced = name in demandShown
+            val demandOk = !c.optBoolean("on_demand", false) || forced || editMode
+            val visibleOk = c.optBoolean("visible", true) || forced
+            val show = visibleOk && demandOk && (item != null || editMode)
+            el.text.text = item?.text ?: if (editMode) ELEMENT_NAMES[name] else ""
             el.pill.visibility = if (show) View.VISIBLE else View.GONE
         }
         position(name)
+    }
+
+    /** Tło: jednolite, szkło (jasne/ciemne, jak w iOS), sama ramka. */
+    private fun background(c: JSONObject, size: Float): GradientDrawable {
+        val bg = bgColor(c, Color.BLACK)
+        val radius = ctx.dp(size * 0.45f).toFloat()
+        val a = Color.alpha(bg)
+        fun mix(col: Int, with: Int, f: Float, alpha: Int) = Color.argb(
+            alpha.coerceIn(0, 255),
+            (Color.red(col) * (1 - f) + Color.red(with) * f).toInt(),
+            (Color.green(col) * (1 - f) + Color.green(with) * f).toInt(),
+            (Color.blue(col) * (1 - f) + Color.blue(with) * f).toInt()
+        )
+        return when (c.optString("style", "solid")) {
+            "glass" -> GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(mix(bg, Color.WHITE, 0.55f, a + 70), mix(bg, Color.WHITE, 0.25f, a + 20), mix(bg, Color.WHITE, 0.1f, a))
+            ).apply {
+                cornerRadius = radius
+                setStroke(ctx.dp(1.5f), Color.argb(150, 255, 255, 255))
+            }
+            "glass_dark" -> GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(mix(bg, Color.WHITE, 0.22f, a + 30), mix(bg, Color.BLACK, 0.2f, a), mix(bg, Color.BLACK, 0.45f, a + 20))
+            ).apply {
+                cornerRadius = radius
+                setStroke(ctx.dp(1.2f), Color.argb(90, 255, 255, 255))
+            }
+            "outline" -> GradientDrawable().apply {
+                cornerRadius = radius
+                setColor(Color.argb(a / 3, Color.red(bg), Color.green(bg), Color.blue(bg)))
+                setStroke(ctx.dp(2f), parseColor(c.optString("color"), Color.WHITE))
+            }
+            else -> GradientDrawable().apply {
+                cornerRadius = radius
+                setColor(bg)
+            }
+        }
+    }
+
+    /** Co pół sekundy sprawdza, czy pole z kilkoma encjami ma przejść do następnej. */
+    private val cycleTick = object : Runnable {
+        override fun run() {
+            val now = System.currentTimeMillis()
+            for (name in SLOTS) {
+                val content = contents[name] ?: continue
+                val el = elements[name] ?: continue
+                if (content.animating || el.pill.visibility != View.VISIBLE) continue
+                val pool = pool(name)
+                if (pool.size < 2) continue
+                val every = cfg(name).optDouble("cycle_seconds", 5.0).coerceAtLeast(1.0) * 1000
+                if (now - content.lastSwitch >= every) {
+                    content.lastSwitch = now
+                    animateNext(name)
+                }
+            }
+            handler.postDelayed(this, 500)
+        }
+    }
+
+    /** Przejście do następnej encji w polu z wybraną animacją. */
+    private fun animateNext(name: String) {
+        val el = elements[name] ?: return
+        val content = contents[name] ?: return
+        val type = cfg(name).optString("transition", "fade")
+        val d = cfg(name).optLong("transition_ms", 600).coerceIn(100, 3000) / 2
+        val p = el.pill
+        val inner = el.inner
+        fun advance() {
+            content.index = (content.index + 1) % Int.MAX_VALUE
+            styleElement(name)
+        }
+        fun done() { content.animating = false }
+        content.animating = true
+        val dist = p.height.toFloat().coerceAtLeast(40f)
+        when (type) {
+            "none" -> { advance(); done() }
+            "flip_x" -> p.animate().rotationX(90f).setDuration(d).withEndAction {
+                advance(); p.rotationX = -90f
+                p.animate().rotationX(0f).setDuration(d).withEndAction { done() }.start()
+            }.start()
+            "flip_y" -> p.animate().rotationY(90f).setDuration(d).withEndAction {
+                advance(); p.rotationY = -90f
+                p.animate().rotationY(0f).setDuration(d).withEndAction { done() }.start()
+            }.start()
+            "zoom" -> p.animate().scaleX(0f).scaleY(0f).alpha(0f).setDuration(d).withEndAction {
+                advance()
+                p.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(d).withEndAction { done() }.start()
+            }.start()
+            "slide_up" -> inner.animate().translationY(-dist).alpha(0f).setDuration(d).withEndAction {
+                advance(); inner.translationY = dist
+                inner.animate().translationY(0f).alpha(1f).setDuration(d).withEndAction { done() }.start()
+            }.start()
+            "slide_left" -> inner.animate().translationX(-p.width.toFloat()).alpha(0f).setDuration(d).withEndAction {
+                advance(); inner.translationX = p.width.toFloat()
+                inner.animate().translationX(0f).alpha(1f).setDuration(d).withEndAction { done() }.start()
+            }.start()
+            else -> p.animate().alpha(0f).setDuration(d).withEndAction {
+                advance()
+                p.animate().alpha(1f).setDuration(d).withEndAction { done() }.start()
+            }.start()
+        }
     }
 
     /** Ustawia element w miejscu x%, y% ekranu (z marginesem bezpieczeństwa). */
@@ -468,15 +620,14 @@ class OverlayManager(private val ctx: Context) {
     /** Treść pola: {slot:1, text, icon, color, expiration, visible:false = wyczyść}. */
     fun setEntity(j: JSONObject): String {
         val slot = slotName(if (j.has("slot")) j.opt("slot") else j.opt("id"))
-            ?: throw IllegalArgumentException("Podaj slot: 1, 2 albo 3")
+            ?: throw IllegalArgumentException("Podaj slot: 1–${SLOTS.size}")
         if (j.has("visible") && !j.optBoolean("visible", true)) {
             clearEntity(slot)
             return slot
         }
         val c = contents[slot]!!
-        c.text = j.optString("text", j.optString("message", ""))
-        c.icon = j.optString("icon", "")
-        c.color = j.optString("color", "")
+        c.items = listOf(Item(j.optString("text", j.optString("message", "")), j.optString("icon", ""), j.optString("color", "")))
+        c.index = 0
 
         contentExpiry.remove(slot)?.let { handler.removeCallbacks(it) }
         val secs = parseSeconds(if (j.has("expiration")) j.opt("expiration") else null, 0)
@@ -499,17 +650,23 @@ class OverlayManager(private val ctx: Context) {
         }
     }
 
-    /** Treść pola pobrana z Home Assistanta (wywołuje HaClient). */
-    fun setHaContent(slot: String, text: String, icon: String) {
+    /** Pozycje pola pobrane z Home Assistanta (wywołuje HaClient). */
+    fun setHaItems(slot: String, items: List<Item>) {
         val c = contents[slot] ?: return
-        if (c.text == text && c.icon == icon) return
-        c.text = text
-        c.icon = icon
-        styleElement(slot)
+        val same = c.items.size == items.size && c.items.zip(items).all { (x, y) ->
+            x.text == y.text && x.icon == y.icon && x.ok == y.ok
+        }
+        if (same) return
+        c.items = items
+        if (!c.animating) styleElement(slot)
     }
 
     fun entitiesJson(): JSONObject = JSONObject().also { o ->
-        for ((k, v) in contents) o.put(k, JSONObject().put("text", v.text).put("icon", v.icon).put("color", v.color))
+        for ((k, v) in contents) {
+            val first = v.items.firstOrNull()
+            o.put(k, JSONObject().put("text", first?.text ?: "").put("icon", first?.icon ?: "")
+                .put("items", v.items.size))
+        }
     }
 
     // ================= powiadomienia =================
@@ -820,6 +977,11 @@ class OverlayManager(private val ctx: Context) {
                 handler.postDelayed(r, secs * 1000)
             }
             ha?.refreshNow()
+            if (contents[slot]?.items.isNullOrEmpty()) {
+                notify(JSONObject().put("title", ELEMENT_NAMES[slot] ?: slot)
+                    .put("message", "Brak danych – przypisz encję HA do tego pola")
+                    .put("icon", "mdi:alert-circle-outline").put("duration", 4))
+            }
         }
         styleElement(slot)
     }

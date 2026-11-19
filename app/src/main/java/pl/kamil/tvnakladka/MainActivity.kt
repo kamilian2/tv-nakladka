@@ -190,6 +190,9 @@ class MainActivity : Activity() {
                 choiceRow("Kolor tekstu", key, "color", OverlayManager.COLORS)
                 choiceRow("Kolor tła", key, "background", OverlayManager.BACKGROUNDS)
                 numberRow("Krycie tła % (0 = bez tła)", key, "opacity", 0, 100, 5, 20)
+                choiceRow("Styl tła", key, "style", OverlayManager.STYLES)
+                numberRow("Krycie tekstu %", key, "text_opacity", 5, 100, 5, 20)
+                toggleRow("Cień pod tekstem", key, "shadow")
                 if (key == "clock") {
                     choiceRow("Format", key, "format", OverlayManager.CLOCK_FORMATS.map { it to it })
                 } else {
@@ -206,6 +209,13 @@ class MainActivity : Activity() {
                         "always" to "Zawsze", "above" to "Wartość > próg", "below" to "Wartość < próg",
                         "equals" to "Stan = próg/tekst", "not_equals" to "Stan ≠ próg/tekst"))
                     numberRow("Próg", key, "threshold", -1000, 100000, 1, 10)
+                    val extra = (2..4).mapNotNull { n -> o.cfg(key).optString("entity$n", "").ifBlank { null } }
+                    rows.addView(label(if (extra.isEmpty())
+                        "Kolejne encje w tym polu (zmiana z animacją): brak – dodasz je na stronie ustawień."
+                        else "Kolejne encje w tym polu: " + extra.joinToString(", ")))
+                    numberRow("Zmiana encji co (s)", key, "cycle_seconds", 1, 120, 1, 5)
+                    choiceRow("Animacja zmiany", key, "transition", OverlayManager.TRANSITIONS)
+                    numberRow("Czas animacji (ms)", key, "transition_ms", 100, 3000, 100, 500)
                     toggleRow("Tylko na żądanie (przycisk pilota)", key, "on_demand")
                     numberRow("Na żądanie – czas pokazania (s, 0 = do ponownego naciśnięcia)", key, "demand_seconds", 0, 300, 1, 10)
                     rows.addView(label("Stan: " + (o.ha?.slotStatus?.get(key) ?: "-")))
