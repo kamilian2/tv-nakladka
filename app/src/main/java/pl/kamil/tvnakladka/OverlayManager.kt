@@ -1033,6 +1033,7 @@ class OverlayManager(private val ctx: Context) {
 
     /** cam:c1 – jedna kamera, cams:all – wszystkie zapisane, stop – zamknij, show:e4 – pokaż pole, show:all. Ponowne naciśnięcie zamyka. */
     fun runKeyAction(action: String) {
+        if (action == "ambi:toggle") { ambiToggle(); return }
         if (action.startsWith("show:")) {
             val what = action.removePrefix("show:")
             if (what == "all") {
@@ -1064,6 +1065,28 @@ class OverlayManager(private val ctx: Context) {
         }
     }
 
+    /** Włącza/wyłącza synchronizację lamp w aplikacji Ambi HA (na tym samym telewizorze). */
+    private fun ambiToggle() {
+        Thread {
+            val msg = try {
+                val c = java.net.URL("http://127.0.0.1:5004/toggle").openConnection() as java.net.HttpURLConnection
+                c.requestMethod = "POST"; c.doOutput = true; c.connectTimeout = 2000; c.readTimeout = 3000
+                c.outputStream.use { it.write("{}".toByteArray()) }
+                val r = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                c.disconnect()
+                if (r.optBoolean("enabled")) "Kolory z ekranu" else "Białe światło"
+            } catch (e: Exception) {
+                null
+            }
+            handler.post {
+                if (msg != null) notify(JSONObject().put("id", "ambi").put("title", "Lampy Ambilight").put("message", msg)
+                    .put("icon", "mdi:television-ambient-light").put("duration", 3))
+                else notify(JSONObject().put("id", "ambi").put("title", "Brak aplikacji Ambi HA")
+                    .put("message", "Uruchom ją na telewizorze").put("icon", "mdi:alert-circle-outline").put("duration", 4))
+            }
+        }.start()
+    }
+
     /** Lista akcji do wyboru (wartość -> nazwa). */
     fun keyActions(): List<Pair<String, String>> {
         val saved = cfg("cams")
@@ -1077,6 +1100,7 @@ class OverlayManager(private val ctx: Context) {
             list.add("show:$s" to "Pokaż: $n")
         }
         list.add("show:all" to "Pokaż wszystkie pola „na żądanie”")
+        list.add("ambi:toggle" to "Ambi HA: przełącz lampy (kolory / biel)")
         return list
     }
 }
